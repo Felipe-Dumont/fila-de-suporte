@@ -1,11 +1,12 @@
 # Fila de Suporte
 
-App web de **arquivo único** em Python + SQLite para organizar duas filas de trabalho:
+App web em Python + SQLite para organizar duas filas de trabalho:
 **Suporte** (o que travou e precisa ser resolvido agora) e **Demandas** (pedidos extras,
 puxados conforme sobra tempo).
 
 Sem framework, sem `pip install`, sem build. Só a biblioteca padrão do Python.
-Todo o código está em `app.py` (~2.500 linhas) e todo o dado em `data.sqlite`.
+O núcleo e o servidor ficam em `app.py`, as telas ficam em `views/` e os dados em
+`data.sqlite`.
 
 ---
 
@@ -50,8 +51,9 @@ e atualize este README junto.
 
 ### Arquitetura
 
-1. **Arquivo único.** Tudo vive em `app.py`. Não quebre em pacotes/módulos sem pedido
-   explícito — a simplicidade de "copiar 1 arquivo e rodar" é o ponto do projeto.
+1. **Views por tela.** O núcleo e o servidor vivem em `app.py`. Cada tela pai fica em
+   sua pasta dentro de `views/`; elementos reutilizados ficam em `views/comum/` e a
+   implementação compartilhada das filas fica em `views/filas/`.
 2. **Só biblioteca padrão.** Zero dependências externas. Nada de Flask, Django, Jinja,
    requests, pandas. Servidor é `http.server.ThreadingHTTPServer`; banco é `sqlite3`;
    HTML é montado com f-strings; os gráficos são **SVG gerado à mão** (`svg_colunas`,
@@ -119,9 +121,9 @@ e atualize este README junto.
 
 ---
 
-## 3. Mapa do `app.py`
+## 3. Mapa do código
 
-O arquivo está dividido em blocos com cabeçalhos de comentário. Ordem e pontos de entrada:
+O `app.py` concentra configuração, banco, regras, escrita, estilos e servidor:
 
 | Faixa aprox. | Bloco | O que tem |
 |---|---|---|
@@ -133,12 +135,22 @@ O arquivo está dividido em blocos com cabeçalhos de comentário. Ordem e ponto
 | 637–710  | Filtros | `ler_filtros()`, `query_string()`, `campos_ocultos()`, `_condicoes()` |
 | 712–852  | **Escritas** | `handle_action()` (todas as ações da equipe), `salvar_avaliacao()`, `abrir_solicitacao()` |
 | 858–…    | CSS | constante `CSS` |
-| 1114–1530| Render da fila | `render_ticket()`, `render_notas()`, `render_edicao()`, `render_abas()`, `shell()`, `render_alertas()` |
-| 1529–1794| Páginas públicas | `shell_publico()`, `render_abrir()`, `render_confirmacao()`, `render_andamento()`, `render_avaliacao()` |
-| 1795–2163| Painel | `coletar_metricas()`, `serie_temporal()`, `render_painel()` |
-| 2164–2410| `render_page()` | monta a tela principal de uma fila |
-| 2412–2502| `Handler` | roteamento `do_GET` / `do_POST` |
-| 2504–2536| Boot | `ip_local()`, `main()` |
+| final    | Views | configuração das dependências e imports de `views/` |
+| final    | `Handler` | roteamento `do_GET` / `do_POST` |
+| final    | Boot | `ip_local()`, `main()` |
+
+As telas estão organizadas assim:
+
+| Pasta | Responsabilidade |
+|---|---|
+| `views/suporte/` | tela pai da fila de suporte |
+| `views/demandas/` | tela pai da fila de demandas |
+| `views/alertas/` | itens que precisam de atenção |
+| `views/painel/` | métricas e gráficos |
+| `views/abrir/` | abertura pública e confirmação |
+| `views/avaliar/` | acompanhamento e avaliação pública |
+| `views/filas/` | renderização compartilhada pelas duas filas |
+| `views/comum/` | componentes e cascas compartilhadas |
 
 **Para adicionar uma ação nova**: crie o `elif action == "..."` em `handle_action()`
 (linha ~712) e o `<form method="post">` correspondente no render, incluindo
@@ -268,13 +280,13 @@ assume SQLite local e um único processo:
 
 ## 7. Contexto para IAs que forem trabalhar neste repositório
 
-- Leia a seção 2 inteira antes de propor mudanças. As restrições (arquivo único, zero
+- Leia a seção 2 inteira antes de propor mudanças. As restrições (views separadas, zero
   dependências, sem JS) são o projeto, não obstáculos a contornar.
 - Não há testes automatizados, nem linter, nem CI. Verificação é manual: rode
   `python3 app.py`, abra as telas afetadas e confira. Antes disso,
-  `python3 -m py_compile app.py` pega erro de sintaxe barato.
+  `python3 -m py_compile app.py views/*/*.py` pega erro de sintaxe barato.
 - Não crie `requirements.txt`, `Dockerfile`, `package.json` ou estrutura de pacote sem
   pedido explícito.
-- Ao editar, siga o estilo do arquivo: pt-BR, comentários curtos explicando o porquê,
+- Ao editar, siga o estilo do projeto: pt-BR, comentários curtos explicando o porquê,
   helpers pequenos, HTML montado por função `render_*`.
 - Se precisar mexer no `data.sqlite`, leia a seção 5 primeiro — ele carrega dados reais.
