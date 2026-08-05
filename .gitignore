@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# SQLite: o data.sqlite É versionado de propósito (ver README, "Banco de dados").
+# Já os arquivos do WAL são estado transitório de uma execução — nunca versionar.
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
+
+# Backups locais do banco
+data.sqlite.bak
+backups/
+
+# Editores / SO
+.vscode/
+.idea/
+.DS_Store
+*.swp
