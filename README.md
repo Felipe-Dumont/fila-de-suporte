@@ -1,26 +1,33 @@
 # SolicitaMais
 
-App web em Python + SQLite para organizar duas filas de trabalho:
+App web em Python com SQLite local e PostgreSQL/Supabase em produção para organizar duas filas de trabalho:
 **Suporte** (o que travou e precisa ser resolvido agora) e **Demandas** (pedidos extras,
 puxados conforme sobra tempo).
 
-Sem framework, sem `pip install`, sem build. Só a biblioteca padrão do Python.
-O núcleo e o servidor ficam em `app.py`, as telas ficam em `views/` e os dados em
-`data.sqlite`.
+Sem framework e sem build. O núcleo e o servidor ficam em `app.py`, as telas ficam em
+`views/`; o `data.sqlite` é usado quando `DATABASE_URL` não está configurada.
 
 ---
 
 ## 1. Rodar em outra máquina
 
-Requisito único: **Python 3.9 ou superior** (`zoneinfo` é usado quando existe; sem ele
-o app cai num offset fixo de -03:00 e continua funcionando).
+Use **Python 3.12**. Somente o acesso ao PostgreSQL exige a dependência declarada em
+`requirements.txt`; o modo SQLite continua usando apenas a biblioteca padrão.
 
 ```bash
 git clone <url-do-repositorio>
 cd fila-de-suporte
 cp .env.example .env
 # edite o .env e use o mesmo SOLICITAMAIS_API_TOKEN do LocarMais
-python3 app.py                  # http://localhost:8001 com o .env.example
+python3 app.py                  # SQLite local, se DATABASE_URL estiver vazia
+```
+
+Para rodar localmente conectado ao Supabase:
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python app.py        # http://localhost:8001 com o .env.example
 ```
 
 O terminal imprime dois endereços: o `localhost` (só esta máquina) e o da rede local
@@ -39,14 +46,16 @@ FILA_HOST=127.0.0.1 python3 app.py        # restringe só a esta máquina
 | `FILA_HOST`          | `0.0.0.0` | Interface de escuta. `0.0.0.0` expõe na rede local |
 | `FILA_PORT`          | `8000`    | Porta HTTP quando não há argumento posicional |
 | `SOLICITAMAIS_API_TOKEN` | vazio | Token Bearer compartilhado exclusivamente com o backend do LocarMais |
+| `DATABASE_URL` | vazio | URL PostgreSQL; vazia mantém o uso do `data.sqlite` |
+| `SOLICITAMAIS_ADMIN_USUARIO` | vazio | Usuário HTTP Basic das telas internas |
+| `SOLICITAMAIS_ADMIN_SENHA` | vazio | Senha HTTP Basic das telas internas |
 
 O arquivo `.env` é carregado automaticamente. Variáveis definidas diretamente no
 processo têm precedência, permitindo sobrescrever a configuração sem editar o arquivo.
 O `.env` local está no `.gitignore`; somente o `.env.example`, sem segredos, é versionado.
 
-O banco `data.sqlite` é criado/migrado automaticamente no start (`init_db()`), ao lado
-do `app.py`. **Este repositório já traz um `data.sqlite` com os dados reais** — ver
-seção 6 antes de mexer nele.
+O schema é criado/migrado automaticamente no start (`init_db()`). **Este repositório
+traz um `data.sqlite` com dados reais** — ver a seção 5 antes de mexer nele.
 
 Windows: use `py app.py`. macOS/Linux: `python3 app.py`.
 
@@ -62,10 +71,10 @@ e atualize este README junto.
 1. **Módulos por responsabilidade.** O núcleo e o servidor vivem em `app.py`. Cada tela
    pai fica em sua pasta dentro de `views/`; elementos reutilizados ficam em
    `views/comum/`; e o despacho, autenticação e contrato HTTP da API ficam em `rotas/`.
-2. **Só biblioteca padrão.** Zero dependências externas. Nada de Flask, Django, Jinja,
-   requests, pandas. Servidor é `http.server.ThreadingHTTPServer`; banco é `sqlite3`;
-   HTML é montado com f-strings; os gráficos são **SVG gerado à mão** (`svg_colunas`,
-   `svg_barras_h`). Se a solução exigir `pip install`, ela está errada para este projeto.
+2. **Sem framework.** Servidor é `http.server.ThreadingHTTPServer`; HTML é montado com
+   f-strings; os gráficos são **SVG gerado à mão** (`svg_colunas`, `svg_barras_h`). A
+   única dependência externa permitida é `psycopg`, usada quando `DATABASE_URL` aponta
+   para PostgreSQL. Não introduza outras dependências sem uma decisão explícita.
 3. **JavaScript mínimo e sem build.** A interface usa HTML + CSS e formulários por
    padrão. JavaScript puro fica reservado a interações que realmente dependem dele,
    como arrastar cards no Kanban e copiar links. Não introduza dependências ou build.
@@ -78,8 +87,9 @@ e atualize este README junto.
 
 ### Segurança (escopo assumido)
 
-6. Uso interno em rede local/confiável. **Não há autenticação** nas telas da equipe —
-   isso é uma escolha consciente do escopo, não uma pendência.
+6. Em rede local, as telas internas podem continuar sem autenticação. Em hospedagem
+   pública, configure `SOLICITAMAIS_ADMIN_USUARIO` e `SOLICITAMAIS_ADMIN_SENHA`; isso
+   protege as telas da equipe com HTTP Basic sem bloquear `/abrir` e `/avaliar`.
 7. O que é obrigatório manter: **SQL sempre parametrizado** (`?`, nunca f-string com valor
    do usuário) e **toda saída escapada** com o helper `e()` (`html.escape(..., quote=True)`).
    Não regrida nesses dois pontos.
@@ -170,6 +180,10 @@ As telas estão organizadas assim:
 | `configuracao/cores.py` | paleta e variáveis de cor do SolicitaMais |
 | `configuracao/api.py` | token e limite de payload da integração privada |
 | `configuracao/ambiente.py` | carregamento do `.env` com a biblioteca padrão |
+| `configuracao/banco.py` | seleção SQLite/PostgreSQL e adaptação parametrizada do SQL |
+| `configuracao/acesso.py` | autenticação HTTP Basic opcional das telas internas |
+| `api/index.py` | entrada serverless da Vercel |
+| `scripts/migrar_sqlite_para_postgres.py` | migração única e segura dos dados locais |
 
 **Para adicionar uma ação nova**: crie o `elif action == "..."` em `handle_action()`
 (linha ~712) e o `<form method="post">` correspondente no render, incluindo
@@ -213,7 +227,7 @@ Ações aceitas em `handle_action()` (campo `action` do form):
 
 | Coluna | Tipo | Observação |
 |---|---|---|
-| `id`           | INTEGER PK AUTOINCREMENT | |
+| `id`           | INTEGER PK AUTOINCREMENT / BIGSERIAL | SQLite / PostgreSQL |
 | `solicitante`  | TEXT NOT NULL | obrigatório |
 | `assunto`      | TEXT NOT NULL | obrigatório |
 | `descricao`    | TEXT NOT NULL DEFAULT `''` | |
@@ -241,8 +255,8 @@ Ações aceitas em `handle_action()` (campo `action` do form):
 
 | Coluna | Tipo | Observação |
 |---|---|---|
-| `id`             | INTEGER PK AUTOINCREMENT | |
-| `solicitacao_id` | INTEGER NOT NULL | sem FK declarada; a exclusão é feita em código |
+| `id`             | INTEGER PK AUTOINCREMENT / BIGSERIAL | SQLite / PostgreSQL |
+| `solicitacao_id` | INTEGER NOT NULL / BIGINT NOT NULL | PostgreSQL usa FK com `ON DELETE CASCADE` |
 | `texto`          | TEXT NOT NULL | |
 | `criado_em`      | TEXT NOT NULL DEFAULT `datetime('now')` | UTC |
 | `publica`        | INTEGER NOT NULL DEFAULT `0` | `1` = visível ao solicitante |
@@ -251,13 +265,12 @@ Ações aceitas em `handle_action()` (campo `action` do form):
 
 ### Como fazer migração de schema
 
-`init_db()` roda a cada boot e é **idempotente**: `CREATE TABLE IF NOT EXISTS`,
-`CREATE INDEX IF NOT EXISTS` e, para colunas novas, checagem via
-`PRAGMA table_info(...)` antes do `ALTER TABLE ... ADD COLUMN`.
+`init_db()` roda a cada boot e é **idempotente**. No SQLite usa
+`PRAGMA table_info(...)`; no PostgreSQL usa `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`.
 
-Para adicionar uma coluna, basta acrescentar a tupla `(nome, ddl)` na lista `novas`
-dentro de `init_db()` (linha ~168). Nunca escreva migração destrutiva nem que dependa
-de rodar uma única vez.
+Para adicionar uma coluna, atualize as duas variantes dentro de `init_db()`: a lista
+`novas` do SQLite e `colunas_solicitacoes` do PostgreSQL. Nunca escreva migração
+destrutiva nem que dependa de rodar uma única vez.
 
 ---
 
@@ -284,45 +297,43 @@ Consequências que quem for mexer precisa saber:
 - **Backup:** copie o `data.sqlite`. **Zerar tudo:** apague `data.sqlite` (e os `-wal` /
   `-shm`, se existirem) — ele é recriado vazio no próximo boot.
 
-> Quando o projeto sair para hospedagem multiusuário, o banco deixa de ser versionado
-> (entra no `.gitignore`) e vira MySQL/Postgres. Ver seção 6.
+O arquivo continua sendo a base local e a origem da migração inicial. Em produção, a
+Vercel nunca grava nele: `DATABASE_URL` seleciona o PostgreSQL.
 
 ---
 
-## 6. Caminho para hospedagem (MySQL / Vercel) — ainda não feito
+## 6. Hospedagem na Vercel com Supabase
 
-Planejado, **não implementado**. Quem for fazer precisa saber que o desenho atual
-assume SQLite local e um único processo:
+O projeto já possui `api/index.py`, `vercel.json`, `.python-version` e
+`requirements.txt`. Na Vercel:
 
-1. `get_db()` (linha ~140) é o único ponto que abre conexão — é ali que entra o driver
-   novo. Mas os `?` de placeholder mudam para `%s` no MySQL, e há ~40 chamadas `execute()`
-   espalhadas: a troca não é de uma linha só.
-2. `datetime('now')` (SQLite) vira `UTC_TIMESTAMP()` (MySQL). Aparece em `criado_em`,
-   `concluido_em` e `nota_em`.
-3. A função `norm()` é registrada em Python via `conn.create_function` — não existe no
-   MySQL. A busca sem acento precisaria de collation `utf8mb4_0900_ai_ci` ou de uma
-   coluna normalizada persistida.
-4. `PRAGMA journal_mode` e `PRAGMA table_info` são específicos do SQLite; as migrações de
-   `init_db()` teriam que virar `INFORMATION_SCHEMA.COLUMNS` ou um versionamento de schema
-   de verdade (tabela `schema_version` + scripts numerados).
-5. **Vercel não roda `ThreadingHTTPServer` com estado.** É serverless: cada request é um
-   processo efêmero. Portar exige adaptar o `Handler` para função serverless (ou trocar
-   por um host que rode processo longo — Railway, Render, Fly.io, VPS). Nesse cenário,
-   a falta de autenticação (regra 6) deixa de ser aceitável e vira requisito.
-6. **Migração dos dados**: exportar as duas tabelas do SQLite e importar no destino,
-   preservando `id` e `token` (os links públicos já entregues dependem do `token`).
+1. Importe este repositório e mantenha **Framework Preset = Other**.
+2. Cadastre `DATABASE_URL` usando a URL do **Transaction Pooler** do Supabase (porta
+   `6543`), `SOLICITAMAIS_API_TOKEN`, `SOLICITAMAIS_ADMIN_USUARIO` e
+   `SOLICITAMAIS_ADMIN_SENHA` nos ambientes desejados.
+3. Faça o deploy. O primeiro cold start executa o schema idempotente.
+4. Atualize a URL do SolicitaMais no `.env` do LocarMais para o domínio da Vercel.
+
+Para migrar o conteúdo do SQLite uma única vez, com o PostgreSQL vazio:
+
+```bash
+.venv/bin/python scripts/migrar_sqlite_para_postgres.py
+```
+
+O script preserva IDs e tokens e cancela sem alterar nada caso encontre registros no
+destino. Revise a autorização para enviar dados reais antes de executá-lo.
 
 ---
 
 ## 7. Contexto para IAs que forem trabalhar neste repositório
 
-- Leia a seção 2 inteira antes de propor mudanças. As restrições (views separadas, zero
-  dependências, sem JS) são o projeto, não obstáculos a contornar.
+- Leia a seção 2 inteira antes de propor mudanças. As restrições (views separadas,
+  dependência externa limitada ao driver PostgreSQL e JavaScript mínimo) são o projeto.
 - Não há testes automatizados, nem linter, nem CI. Verificação é manual: rode
   `python3 app.py`, abra as telas afetadas e confira. Antes disso,
   `python3 -m py_compile app.py configuracao/*.py rotas/*.py views/*/*.py` pega erro de sintaxe barato.
-- Não crie `requirements.txt`, `Dockerfile`, `package.json` ou estrutura de pacote sem
-  pedido explícito.
+- Não acrescente dependências ao `requirements.txt`, `Dockerfile`, `package.json` ou
+  outra estrutura de implantação sem pedido explícito.
 - Ao editar, siga o estilo do projeto: pt-BR, comentários curtos explicando o porquê,
   helpers pequenos, HTML montado por função `render_*`.
 - Se precisar mexer no `data.sqlite`, leia a seção 5 primeiro — ele carrega dados reais.

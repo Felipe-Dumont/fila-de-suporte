@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-SolicitaMais — app em Python + SQLite.
-Só usa a biblioteca padrão: nada de pip, nada de instalar. Rode com:
+SolicitaMais — app em Python com SQLite local e PostgreSQL em produção.
+Rode localmente com:
 
     python3 app.py            # abre em http://localhost:8000
     python3 app.py 8080       # ou escolha a porta
 
-O banco (data.sqlite) é criado automaticamente ao lado deste arquivo.
+O banco local (data.sqlite) é criado automaticamente ao lado deste arquivo.
 """
 
 import html
@@ -23,6 +23,9 @@ from configuracao.ambiente import carregar_ambiente
 
 carregar_ambiente()
 
+from configuracao.banco import conectar_postgres, usa_postgres
+from configuracao.acesso import acesso_configurado, configuracao_incompleta
+from configuracao.acesso import credenciais_validas
 from configuracao.cores import COR_DEMANDAS, COR_EIXO_GRAFICO, COR_GRADE_GRAFICO
 from configuracao.cores import COR_SUPORTE, COR_TEXTO_GRAFICO, COR_TEXTO_SUAVE_GRAFICO
 from configuracao.cores import RAMPA_ATRASO, RAMPA_AVALIACAO, gerar_variaveis_css
@@ -51,7 +54,14 @@ ICONE_PATH = os.path.join(
 )
 PATH_LOGO = "/imagens/logo-solicitamais.png"
 PATH_ICONE = "/imagens/logo-icone-solicitamais-favicon.png"
-PORT = int(sys.argv[1]) if len(sys.argv) > 1 else int(os.environ.get("FILA_PORT", "8000"))
+def porta_local() -> int:
+    """Ignora argumentos internos da plataforma ao escolher a porta local."""
+    if len(sys.argv) > 1 and sys.argv[1].isdigit():
+        return int(sys.argv[1])
+    return int(os.environ.get("FILA_PORT", "8000"))
+
+
+PORT = porta_local()
 # "0.0.0.0" = visível pra rede local; FILA_HOST=127.0.0.1 restringe a esta máquina
 HOST = os.environ.get("FILA_HOST", "0.0.0.0")
 
@@ -156,7 +166,10 @@ def novo_token() -> str:
     return secrets.token_urlsafe(9)
 
 
-def get_db() -> sqlite3.Connection:
+def get_db():
+    if usa_postgres():
+        return conectar_postgres()
+
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode = WAL;")
@@ -166,6 +179,10 @@ def get_db() -> sqlite3.Connection:
 
 
 def init_db() -> None:
+    if usa_postgres():
+        init_db_postgres()
+        return
+
     conn = get_db()
     conn.execute(
         """
@@ -237,6 +254,115 @@ def init_db() -> None:
 
     conn.commit()
     conn.close()
+
+
+def init_db_postgres() -> None:
+    """Cria e atualiza o schema persistente usado no Supabase."""
+    conn = get_db()
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS solicitacoes (
+                id BIGSERIAL PRIMARY KEY,
+                solicitante TEXT NOT NULL,
+                assunto TEXT NOT NULL,
+                descricao TEXT NOT NULL DEFAULT '',
+                prioridade TEXT NOT NULL DEFAULT 'normal',
+                status TEXT NOT NULL DEFAULT 'na_fila',
+                criado_em TEXT NOT NULL DEFAULT
+                    (to_char(timezone('UTC', CURRENT_TIMESTAMP), 'YYYY-MM-DD HH24:MI:SS')),
+                concluido_em TEXT,
+                fila TEXT NOT NULL DEFAULT 'suporte',
+                dev TEXT NOT NULL DEFAULT '',
+                previsao TEXT,
+                categoria TEXT NOT NULL DEFAULT '',
+                token TEXT,
+                nota INTEGER,
+                nota_obs TEXT NOT NULL DEFAULT '',
+                nota_em TEXT,
+                origem_sistema TEXT NOT NULL DEFAULT '',
+                origem_usuario_id BIGINT,
+                origem_usuario_nome TEXT NOT NULL DEFAULT '',
+                origem_usuario_email TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
+        colunas_solicitacoes = (
+            ("fila", "TEXT NOT NULL DEFAULT 'suporte'"),
+            ("dev", "TEXT NOT NULL DEFAULT ''"),
+            ("previsao", "TEXT"),
+            ("categoria", "TEXT NOT NULL DEFAULT ''"),
+            ("token", "TEXT"),
+            ("nota", "INTEGER"),
+            ("nota_obs", "TEXT NOT NULL DEFAULT ''"),
+            ("nota_em", "TEXT"),
+            ("origem_sistema", "TEXT NOT NULL DEFAULT ''"),
+            ("origem_usuario_id", "BIGINT"),
+            ("origem_usuario_nome", "TEXT NOT NULL DEFAULT ''"),
+            ("origem_usuario_email", "TEXT NOT NULL DEFAULT ''"),
+        )
+        for nome, definicao in colunas_solicitacoes:
+            conn.execute(
+                f"ALTER TABLE solicitacoes ADD COLUMN IF NOT EXISTS {nome} {definicao}"
+            )
+
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_sol_token ON solicitacoes (token)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sol_origem_usuario "
+            "ON solicitacoes (origem_sistema, origem_usuario_id)"
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS anotacoes (
+                id BIGSERIAL PRIMARY KEY,
+                solicitacao_id BIGINT NOT NULL REFERENCES solicitacoes(id) ON DELETE CASCADE,
+                texto TEXT NOT NULL,
+                criado_em TEXT NOT NULL DEFAULT
+                    (to_char(timezone('UTC', CURRENT_TIMESTAMP), 'YYYY-MM-DD HH24:MI:SS')),
+                publica INTEGER NOT NULL DEFAULT 0
+            )
+            """
+        )
+        conn.execute(
+            "ALTER TABLE anotacoes ADD COLUMN IF NOT EXISTS publica INTEGER NOT NULL DEFAULT 0"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_anotacoes_sol ON anotacoes (solicitacao_id)"
+        )
+        conn.execute(
+            """
+            CREATE OR REPLACE FUNCTION norm(valor TEXT)
+            RETURNS TEXT
+            LANGUAGE SQL
+            IMMUTABLE
+            PARALLEL SAFE
+            AS $$
+                SELECT translate(
+                    lower(coalesce(valor, '')),
+                    'áàãâäéèêëíìîïóòõôöúùûüç',
+                    'aaaaaeeeeiiiiooooouuuuc'
+                )
+            $$
+            """
+        )
+
+        faltando = [linha["id"] for linha in conn.execute(
+            "SELECT id FROM solicitacoes WHERE token IS NULL OR token = ''"
+        )]
+        for solicitacao_id in faltando:
+            conn.execute(
+                "UPDATE solicitacoes SET token = ? WHERE id = ?",
+                (novo_token(), solicitacao_id),
+            )
+
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 # -----------------------------------------------------------------------------
@@ -1236,11 +1362,34 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _autorizar_area_interna(self) -> bool:
+        if configuracao_incompleta():
+            self._send_html(
+                "<h1>Configuração incompleta</h1>"
+                "<p>Defina usuário e senha da área interna.</p>",
+                503,
+            )
+            return False
+        if credenciais_validas(self.headers.get("Authorization", "")):
+            return True
+
+        if not acesso_configurado():
+            return True
+
+        corpo = "<h1>Acesso restrito</h1><p>Informe as credenciais da equipe.</p>"
+        data = corpo.encode("utf-8")
+        self.send_response(401)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("WWW-Authenticate", 'Basic realm="SolicitaMais", charset="UTF-8"')
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(data)
+        return False
+
     def do_GET(self):
         url = urlparse(self.path)
         if atender_get_api(self, url):
-            return
-        if atender_get_kanban(self, url):
             return
         imagens = {PATH_LOGO: LOGO_PATH, PATH_ICONE: ICONE_PATH}
         if url.path in imagens:
@@ -1261,6 +1410,10 @@ class Handler(BaseHTTPRequestHandler):
                 (q.get("t", [""])[0] or "").strip(), salvo=q.get("ok") == ["1"]
             )
             self._send_html(corpo, status)
+            return
+        if not self._autorizar_area_interna():
+            return
+        if atender_get_kanban(self, url):
             return
         if url.path == PATH_ALERTAS:
             self._send_html(render_alertas())
@@ -1285,10 +1438,14 @@ class Handler(BaseHTTPRequestHandler):
         url = urlparse(self.path)
         if atender_post_api(self, url):
             return
+        caminho = url.path
+        if (
+            caminho not in (PATH_ABRIR, PATH_AVALIAR)
+            and not self._autorizar_area_interna()
+        ):
+            return
         if atender_post_kanban(self, url):
             return
-
-        caminho = url.path
 
         length = int(self.headers.get("Content-Length", 0))
         raw = self.rfile.read(length).decode("utf-8") if length else ""
@@ -1358,7 +1515,8 @@ def main() -> None:
         base = f"http://{ip_local()}:{PORT}"
         print(f"  Na rede local (mesmo Wi-Fi):  {base}")
     print(f"  Abertura pelo solicitante:    {base}{PATH_ABRIR}")
-    print(f"  Banco: {DB_PATH}")
+    banco = "PostgreSQL (DATABASE_URL)" if usa_postgres() else DB_PATH
+    print(f"  Banco: {banco}")
     print("  Ctrl+C para parar.\n")
     try:
         server.serve_forever()
