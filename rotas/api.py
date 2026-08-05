@@ -158,18 +158,19 @@ def _criar_chamado(payload: dict) -> tuple[dict, dict]:
     token = _dependencias["novo_token"]()
     conn = _dependencias["get_db"]()
     try:
-        cursor = conn.execute(
+        chamado_id = conn.execute(
             "INSERT INTO solicitacoes "
             "(solicitante, assunto, descricao, prioridade, fila, token, "
             "origem_sistema, origem_usuario_id, origem_usuario_nome, "
-            "origem_usuario_email) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "origem_usuario_email) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "RETURNING id",
             (
                 nome, assunto, descricao, "normal", fila, token, "locarmais",
                 usuario_id, nome, email,
             ),
-        )
+        ).fetchone()["id"]
         chamado = conn.execute(
-            "SELECT * FROM solicitacoes WHERE id = ?", (cursor.lastrowid,)
+            "SELECT * FROM solicitacoes WHERE id = ?", (chamado_id,)
         ).fetchone()
         conn.commit()
     finally:
