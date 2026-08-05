@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Fila de Suporte — app em Python + SQLite.
+SolicitaMais — app em Python + SQLite.
 Só usa a biblioteca padrão: nada de pip, nada de instalar. Rode com:
 
     python3 app.py            # abre em http://localhost:8000
@@ -1293,7 +1293,7 @@ def main() -> None:
     init_db()
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     base = f"http://localhost:{PORT}"
-    print(f"\n  Fila de Suporte rodando em  {base}")
+    print(f"\n  SolicitaMais rodando em      {base}")
     if HOST == "0.0.0.0":
         base = f"http://{ip_local()}:{PORT}"
         print(f"  Na rede local (mesmo Wi-Fi):  {base}")

@@ -1,4 +1,4 @@
-# Fila de Suporte
+# SolicitaMais
 
 App web em Python + SQLite para organizar duas filas de trabalho:
 **Suporte** (o que travou e precisa ser resolvido agora) e **Demandas** (pedidos extras,

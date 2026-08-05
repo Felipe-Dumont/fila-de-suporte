@@ -310,7 +310,7 @@ def shell(titulo: str, sub: str, contadores: str, abas: str, banner: str, corpo:
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" type="image/png" href="{PATH_ICONE}">
-<title>Fila de Suporte · {titulo}</title>
+<title>SolicitaMais · {titulo}</title>
 <style>{CSS}</style>
 </head>
 <body>
@@ -343,7 +343,7 @@ def shell_publico(titulo: str, corpo: str, h1: str = "Como foi o atendimento?") 
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
 <link rel="icon" type="image/png" href="{PATH_ICONE}">
-<title>{titulo}</title>
+<title>SolicitaMais · {titulo}</title>
 <style>{CSS}</style>
 </head>
 <body>
