@@ -18,7 +18,9 @@ o app cai num offset fixo de -03:00 e continua funcionando).
 ```bash
 git clone <url-do-repositorio>
 cd fila-de-suporte
-python3 app.py                  # http://localhost:8000
+cp .env.example .env
+# edite o .env e use o mesmo SOLICITAMAIS_API_TOKEN do LocarMais
+python3 app.py                  # http://localhost:8001 com o .env.example
 ```
 
 O terminal imprime dois endereços: o `localhost` (só esta máquina) e o da rede local
@@ -33,8 +35,14 @@ FILA_HOST=127.0.0.1 python3 app.py        # restringe só a esta máquina
 
 | Variável / argumento | Padrão    | O que faz |
 |----------------------|-----------|-----------|
-| `argv[1]`            | `8000`    | Porta HTTP |
+| `argv[1]`            | —         | Quando informado, substitui `FILA_PORT` |
 | `FILA_HOST`          | `0.0.0.0` | Interface de escuta. `0.0.0.0` expõe na rede local |
+| `FILA_PORT`          | `8000`    | Porta HTTP quando não há argumento posicional |
+| `SOLICITAMAIS_API_TOKEN` | vazio | Token Bearer compartilhado exclusivamente com o backend do LocarMais |
+
+O arquivo `.env` é carregado automaticamente. Variáveis definidas diretamente no
+processo têm precedência, permitindo sobrescrever a configuração sem editar o arquivo.
+O `.env` local está no `.gitignore`; somente o `.env.example`, sem segredos, é versionado.
 
 O banco `data.sqlite` é criado/migrado automaticamente no start (`init_db()`), ao lado
 do `app.py`. **Este repositório já traz um `data.sqlite` com os dados reais** — ver
@@ -51,18 +59,20 @@ e atualize este README junto.
 
 ### Arquitetura
 
-1. **Views por tela.** O núcleo e o servidor vivem em `app.py`. Cada tela pai fica em
-   sua pasta dentro de `views/`; elementos reutilizados ficam em `views/comum/` e a
-   implementação compartilhada das filas fica em `views/filas/`.
+1. **Módulos por responsabilidade.** O núcleo e o servidor vivem em `app.py`. Cada tela
+   pai fica em sua pasta dentro de `views/`; elementos reutilizados ficam em
+   `views/comum/`; e o despacho, autenticação e contrato HTTP da API ficam em `rotas/`.
 2. **Só biblioteca padrão.** Zero dependências externas. Nada de Flask, Django, Jinja,
    requests, pandas. Servidor é `http.server.ThreadingHTTPServer`; banco é `sqlite3`;
    HTML é montado com f-strings; os gráficos são **SVG gerado à mão** (`svg_colunas`,
    `svg_barras_h`). Se a solução exigir `pip install`, ela está errada para este projeto.
-3. **Sem JavaScript.** A interface é HTML + CSS puros, com `<form>` e `<details>`.
-   Não introduza JS nem front-end build.
-4. **Padrão PRG.** Todo POST responde `303` redirecionando para um GET — nunca renderize
-   HTML direto na resposta de um POST de ação (exceção: erro de validação em `/abrir`,
-   que devolve `400` com o formulário preenchido).
+3. **JavaScript mínimo e sem build.** A interface usa HTML + CSS e formulários por
+   padrão. JavaScript puro fica reservado a interações que realmente dependem dele,
+   como arrastar cards no Kanban e copiar links. Não introduza dependências ou build.
+4. **Padrão PRG nas telas.** Todo POST de formulário responde `303` redirecionando para
+   um GET — nunca renderize HTML direto na resposta de uma ação (exceções: erro de
+   validação em `/abrir`, que devolve `400`, a API JSON privada e a movimentação
+   assíncrona do Kanban).
 5. **Código e comentários em português.** Nomes de funções, variáveis, rotas e textos de
    UI em pt-BR. Comentários explicam **o porquê**, não o quê.
 
@@ -75,6 +85,8 @@ e atualize este README junto.
    Não regrida nesses dois pontos.
 8. Páginas públicas (`/abrir`, `/avaliar`) são acessíveis sem login e usam **token opaco**
    (`secrets.token_urlsafe(9)`) — nunca exponha o `id` numérico em link público.
+   A rota `/api/chamados` é privada e exige o Bearer token configurado em
+   `SOLICITAMAIS_API_TOKEN`.
 
 ### Regras de negócio
 
@@ -123,7 +135,7 @@ e atualize este README junto.
 
 ## 3. Mapa do código
 
-O `app.py` concentra configuração, banco, regras, escrita, estilos e servidor:
+O `app.py` concentra banco, regras, escrita, estilos e servidor, delegando telas e API:
 
 | Faixa aprox. | Bloco | O que tem |
 |---|---|---|
@@ -151,6 +163,13 @@ As telas estão organizadas assim:
 | `views/avaliar/` | acompanhamento e avaliação pública |
 | `views/filas/` | renderização compartilhada pelas duas filas |
 | `views/comum/` | componentes e cascas compartilhadas |
+| `views/api/` | site visual de documentação da API |
+| `rotas/api.py` | endpoints, autenticação, validação e especificação OpenAPI |
+| `views/kanban/` | quadro, filtros e interação de arrastar chamados |
+| `rotas/kanban.py` | consulta e persistência das movimentações do Kanban |
+| `configuracao/cores.py` | paleta e variáveis de cor do SolicitaMais |
+| `configuracao/api.py` | token e limite de payload da integração privada |
+| `configuracao/ambiente.py` | carregamento do `.env` com a biblioteca padrão |
 
 **Para adicionar uma ação nova**: crie o `elif action == "..."` em `handle_action()`
 (linha ~712) e o `<form method="post">` correspondente no render, incluindo
@@ -164,11 +183,23 @@ As telas estão organizadas assim:
 | GET  | `/demandas`    | Fila de demandas (mesmos filtros) |
 | GET  | `/alertas`     | Itens parados nas duas filas |
 | GET  | `/painel`      | Métricas e gráficos (`?dias=7\|30\|90\|0`) |
+| GET  | `/kanban` | Quadro completo; aceita `?q=&fila=&resp=&cat=` |
 | GET  | `/abrir`       | **Público** — formulário de abertura; `?ok=<token>` = recibo |
 | GET  | `/avaliar?t=`  | **Público** — avaliação do atendimento concluído |
+| GET  | `/api` | **Público** — documentação visual da API |
+| GET  | `/api/documentacao` | Alias da documentação visual |
+| GET  | `/api/openapi.json` | Especificação OpenAPI 3.1 para Postman, Insomnia ou Swagger |
+| GET  | `/api/chamados` | **Privado** — chamados do LocarMais; aceita `?usuario_id=<id>` |
 | POST | `/abrir`       | Cria via solicitante → `303` para o recibo |
 | POST | `/avaliar`     | Grava nota → `303` de volta para a página pública |
+| POST | `/api/chamados` | **Privado** — cria chamado identificado com o usuário do LocarMais |
+| POST | `/kanban/mover` | Atualiza etapa, status e responsável ao mover um card |
 | POST | qualquer outra | `handle_action()` → `303` para a fila (ou para `/alertas` se o form mandar `voltar=/alertas`) |
+
+As duas chamadas da API exigem `Authorization: Bearer <token>`. O backend do LocarMais
+envia a identidade do usuário autenticado; esse dado não é aceito diretamente do
+navegador. Sem `usuario_id`, o GET retorna todos os chamados originados no LocarMais e
+deve ser usado apenas pelo fluxo de Super Admin.
 
 Ações aceitas em `handle_action()` (campo `action` do form):
 `criar`, `editar`, `atribuir`, `anotar`, `nota_visivel`, `apagar_nota`,
@@ -198,8 +229,13 @@ Ações aceitas em `handle_action()` (campo `action` do form):
 | `nota`         | INTEGER | 1–5; `NULL` = não avaliado |
 | `nota_obs`     | TEXT NOT NULL DEFAULT `''` | máx. 1000 chars |
 | `nota_em`      | TEXT | UTC |
+| `origem_sistema` | TEXT NOT NULL DEFAULT `''` | `locarmais` nos chamados criados pela integração |
+| `origem_usuario_id` | INTEGER | ID estável do usuário no LocarMais |
+| `origem_usuario_nome` | TEXT NOT NULL DEFAULT `''` | nome registrado no momento da abertura |
+| `origem_usuario_email` | TEXT NOT NULL DEFAULT `''` | e-mail registrado no momento da abertura |
 
-Índice: `idx_sol_token` (UNIQUE em `token`).
+Índices: `idx_sol_token` (UNIQUE em `token`) e `idx_sol_origem_usuario`
+(em `origem_sistema`, `origem_usuario_id`).
 
 ### `anotacoes`
 
@@ -284,7 +320,7 @@ assume SQLite local e um único processo:
   dependências, sem JS) são o projeto, não obstáculos a contornar.
 - Não há testes automatizados, nem linter, nem CI. Verificação é manual: rode
   `python3 app.py`, abra as telas afetadas e confira. Antes disso,
-  `python3 -m py_compile app.py views/*/*.py` pega erro de sintaxe barato.
+  `python3 -m py_compile app.py configuracao/*.py rotas/*.py views/*/*.py` pega erro de sintaxe barato.
 - Não crie `requirements.txt`, `Dockerfile`, `package.json` ou estrutura de pacote sem
   pedido explícito.
 - Ao editar, siga o estilo do projeto: pt-BR, comentários curtos explicando o porquê,

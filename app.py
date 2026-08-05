@@ -19,6 +19,21 @@ from datetime import date, datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, urlencode, urlparse
 
+from configuracao.ambiente import carregar_ambiente
+
+carregar_ambiente()
+
+from configuracao.cores import COR_DEMANDAS, COR_EIXO_GRAFICO, COR_GRADE_GRAFICO
+from configuracao.cores import COR_SUPORTE, COR_TEXTO_GRAFICO, COR_TEXTO_SUAVE_GRAFICO
+from configuracao.cores import RAMPA_ATRASO, RAMPA_AVALIACAO, gerar_variaveis_css
+from rotas.api import atender_get as atender_get_api
+from rotas.api import atender_post as atender_post_api
+from rotas.api import configurar as configurar_api
+from rotas.kanban import PATH_KANBAN
+from rotas.kanban import atender_get as atender_get_kanban
+from rotas.kanban import atender_post as atender_post_kanban
+from rotas.kanban import configurar as configurar_kanban
+
 try:
     from zoneinfo import ZoneInfo
     LOCAL_TZ = ZoneInfo("America/Sao_Paulo")
@@ -36,7 +51,7 @@ ICONE_PATH = os.path.join(
 )
 PATH_LOGO = "/imagens/logo-solicitamais.png"
 PATH_ICONE = "/imagens/logo-icone-solicitamais-favicon.png"
-PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
+PORT = int(sys.argv[1]) if len(sys.argv) > 1 else int(os.environ.get("FILA_PORT", "8000"))
 # "0.0.0.0" = visível pra rede local; FILA_HOST=127.0.0.1 restringe a esta máquina
 HOST = os.environ.get("FILA_HOST", "0.0.0.0")
 
@@ -65,17 +80,11 @@ PATH_ABRIR = "/abrir"
 EXPEDIENTE = (8, 18)
 DIAS_SEMANA = ("segunda", "terça", "quarta", "quinta", "sexta", "sábado", "domingo")
 
-# Paleta dos gráficos. Não escolhida no olho: validada com o validador da
-# skill dataviz contra a superfície branca dos cards (#ffffff).
-#   categórico 2 slots  -> ΔE CVD 24.7 / normal 33.6, contraste >= 3:1  (PASS)
-#   rampa ordinal azul  -> L monotônica, ponta clara 2.11:1             (PASS)
-COR_SUPORTE = "#2a78d6"     # slot categórico 1
-COR_DEMANDAS = "#eb6834"    # slot categórico 2
-RAMPA_IDADE = ("#86b6ef", "#5598e7", "#2a78d6", "#1c5cab", "#0d366b")
-VIZ_GRID = "#e1e0d9"
-VIZ_EIXO = "#c3c2b7"
-VIZ_INK = "#52514e"
-VIZ_MUTED = "#898781"
+# Gráficos seguem a mesma paleta centralizada usada pela interface.
+VIZ_GRID = COR_GRADE_GRAFICO
+VIZ_EIXO = COR_EIXO_GRAFICO
+VIZ_INK = COR_TEXTO_GRAFICO
+VIZ_MUTED = COR_TEXTO_SUAVE_GRAFICO
 
 PERIODOS = ((7, "7 dias"), (30, "30 dias"), (90, "90 dias"), (0, "Tudo"))
 
@@ -184,6 +193,10 @@ def init_db() -> None:
         ("nota", "INTEGER"),                       # 1 a 5; NULL = ainda não avaliado
         ("nota_obs", "TEXT NOT NULL DEFAULT ''"),
         ("nota_em", "TEXT"),
+        ("origem_sistema", "TEXT NOT NULL DEFAULT ''"),
+        ("origem_usuario_id", "INTEGER"),
+        ("origem_usuario_nome", "TEXT NOT NULL DEFAULT ''"),
+        ("origem_usuario_email", "TEXT NOT NULL DEFAULT ''"),
     )
     for nome, ddl in novas:
         if nome not in existentes:
@@ -191,6 +204,10 @@ def init_db() -> None:
 
     conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_sol_token ON solicitacoes (token)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_sol_origem_usuario "
+        "ON solicitacoes (origem_sistema, origem_usuario_id)"
     )
     # itens antigos não tinham token; sem isso não dá pra compartilhá-los
     faltando = [r["id"] for r in conn.execute(
@@ -255,12 +272,13 @@ def prazo(previsao: str) -> tuple:
     quando_txt = d.strftime("%d/%m")
     if dias < 0:
         atraso = -dias
-        return f"Atrasada {atraso}d · era {quando_txt}", "late"
+        classe = "critical" if atraso >= 3 else "late"
+        return f"Atrasada {atraso}d · era {quando_txt}", classe
     if dias == 0:
         return f"Entrega hoje · {quando_txt}", "due"
     if dias == 1:
         return f"Entrega amanhã · {quando_txt}", "due"
-    return f"Entrega {quando_txt} · em {dias}d", "plain"
+    return f"Entrega {quando_txt} · em {dias}d", "scheduled"
 
 
 def duracao(iso: str) -> str:
@@ -599,6 +617,25 @@ def em_alerta(s: sqlite3.Row, fila: str) -> bool:
     return espera_estourada(s) if fila == FILA_SUPORTE else prazo_vencido(s)
 
 
+def nivel_atraso(s: sqlite3.Row, fila: str) -> str:
+    """Classifica alertas em atenção ou crítico sem alterar a ordem da fila."""
+    if not em_alerta(s, fila):
+        return ""
+
+    if fila == FILA_DEMANDAS:
+        try:
+            previsao = date.fromisoformat(s["previsao"])
+        except ValueError:
+            return ""
+        dias_atraso = (datetime.now(LOCAL_TZ).date() - previsao).days
+
+        return "critico" if dias_atraso >= 3 else "atencao"
+
+    idade = datetime.now(timezone.utc) - _parse_utc(s["criado_em"])
+
+    return "critico" if idade >= timedelta(days=3) else "atencao"
+
+
 def buscar_alertas(conn: sqlite3.Connection) -> dict:
     """As duas listas de alerta, já filtradas no SQL."""
     corte = (
@@ -867,19 +904,7 @@ def abrir_solicitacao(form: dict) -> tuple:
 # -----------------------------------------------------------------------------
 CSS = """
     :root {
-        --paper:  #eceff3;
-        --surface:#ffffff;
-        --ink:    #16202b;
-        --muted:  #64717f;
-        --line:   #d9e0e8;
-        --signal: #2f5ee0;
-        --signal-ink:#1f47b8;
-        --wait-bg:#fbf0dc; --wait-ink:#8a5600;
-        --live-bg:#dff3ee; --live-ink:#0a6f5d;
-        --alta-bg:#fbe3e3; --alta-ink:#a4302c;
-        --late-bg:#fbe3e3; --late-ink:#a4302c;
-        --due-bg: #fbf0dc; --due-ink: #8a5600;
-        --dev-bg: #e9e9fb; --dev-ink: #4a3fa8;
+__VARIAVEIS_DE_COR__
     }
     * { box-sizing: border-box; }
     body {
@@ -904,22 +929,22 @@ CSS = """
     label:first-of-type { margin-top: 0; }
     input, textarea, select {
         width: 100%; font: inherit; color: var(--ink);
-        background: #fbfcfd; border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px;
+        background: var(--field-bg); border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px;
     }
     input:focus, textarea:focus, select:focus {
         outline: none; border-color: var(--signal);
-        box-shadow: 0 0 0 3px rgba(47,94,224,.14); background: #fff;
+        box-shadow: 0 0 0 3px rgba(var(--signal-rgb),.16); background: var(--surface);
     }
     textarea { resize: vertical; min-height: 62px; }
     .btn {
         display: inline-flex; align-items: center; gap: 7px; font: inherit; font-weight: 550;
         cursor: pointer; border: 1px solid transparent; border-radius: 8px; padding: 9px 14px;
     }
-    .btn.primary { width: 100%; justify-content: center; margin-top: 18px; background: var(--signal); color: #fff; }
+    .btn.primary { width: 100%; justify-content: center; margin-top: 18px; background: var(--signal); color: var(--surface); }
     .btn.primary:hover { background: var(--signal-ink); }
-    .btn.ghost { background: #fff; border-color: var(--line); color: var(--ink); padding: 6px 11px; font-size: 13px; }
-    .btn.ghost:hover { border-color: #b9c3ce; }
-    .btn.ghost.danger:hover { border-color: var(--alta-ink); color: var(--alta-ink); }
+    .btn.ghost { background: var(--surface); border-color: var(--line); color: var(--ink); padding: 6px 11px; font-size: 13px; }
+    .btn.ghost:hover { border-color: var(--line-strong); }
+    .btn.ghost.danger:hover { border-color: var(--danger); color: var(--danger); }
     section h2.section { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 0 0 12px; font-weight: 600; }
     form.filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 0 0 12px; }
     form.filters input[type="search"] { flex: 1 1 190px; width: auto; }
@@ -931,24 +956,26 @@ CSS = """
     .found a:hover { text-decoration: underline; }
     .queue { display: flex; flex-direction: column; gap: 10px; }
     .ticket { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; display: grid; grid-template-columns: 52px 1fr; overflow: hidden; }
-    .ticket .pos { display: flex; flex-direction: column; align-items: center; justify-content: center; border-right: 1px solid var(--line); background: #f6f8fb; padding: 12px 0; }
+    .ticket .pos { display: flex; flex-direction: column; align-items: center; justify-content: center; border-right: 1px solid var(--line); background: var(--surface-soft); padding: 12px 0; }
     .ticket .pos .n { font-size: 18px; font-weight: 600; color: var(--muted); }
     .ticket .body { padding: 14px 16px; }
     .ticket.next { border-color: var(--signal); box-shadow: 0 0 0 1px var(--signal); }
     .ticket.next .pos { background: var(--signal); }
-    .ticket.next .pos .n { color: #fff; }
+    .ticket.next .pos .n { color: var(--surface); }
     .eyebrow { font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--signal); font-weight: 700; margin-bottom: 4px; }
     .ticket .title { font-weight: 600; font-size: 15.5px; }
     .ticket .meta { color: var(--muted); font-size: 12.5px; margin-top: 3px; }
-    .ticket .desc { margin: 9px 0 0; color: #384454; font-size: 13.5px; white-space: pre-wrap; }
+    .ticket .desc { margin: 9px 0 0; color: var(--text-secondary); font-size: 13.5px; white-space: pre-wrap; }
     .tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 11px; }
     .tag { font-size: 11px; font-weight: 600; padding: 2px 9px; border-radius: 999px; letter-spacing: .02em; }
     .tag.wait { background: var(--wait-bg); color: var(--wait-ink); }
     .tag.live { background: var(--live-bg); color: var(--live-ink); }
     .tag.alta { background: var(--alta-bg); color: var(--alta-ink); }
-    .tag.plain { background: #eef1f5; color: var(--muted); }
+    .tag.plain { background: var(--surface-muted); color: var(--muted); }
     .tag.late { background: var(--late-bg); color: var(--late-ink); }
     .tag.due  { background: var(--due-bg);  color: var(--due-ink); }
+    .tag.scheduled { background: var(--scheduled-bg); color: var(--scheduled-ink); }
+    .tag.critical { background: var(--critical-bg); color: var(--critical-ink); }
     .tag.dev  { background: var(--dev-bg);  color: var(--dev-ink); }
     nav.filas { display: flex; gap: 4px; margin: 0 0 22px; border-bottom: 1px solid var(--line); }
     nav.filas a {
@@ -958,38 +985,41 @@ CSS = """
     nav.filas a:hover { color: var(--ink); }
     nav.filas a.on { color: var(--signal); border-bottom-color: var(--signal); }
     nav.filas a .pill {
-        background: #eef1f5; color: var(--muted); font-size: 11px; font-weight: 600;
+        background: var(--surface-muted); color: var(--muted); font-size: 11px; font-weight: 600;
         border-radius: 999px; padding: 1px 7px; margin-left: 6px;
     }
-    nav.filas a.on .pill { background: var(--signal); color: #fff; }
-    nav.filas a .pill.bad { background: var(--alta-ink); color: #fff; }
+    nav.filas a.on .pill { background: var(--signal); color: var(--surface); }
+    nav.filas a .pill.bad { background: var(--danger); color: var(--danger-ink); }
     a.alerta, div.alerta {
         display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-        background: var(--alta-bg); color: var(--alta-ink); border: 1px solid #f0c9c7;
+        background: var(--alta-bg); color: var(--alta-ink); border: 1px solid var(--danger-line);
         border-radius: 10px; padding: 11px 15px; margin: 0 0 22px;
         font-size: 13.5px; text-decoration: none;
     }
-    a.alerta:hover { border-color: var(--alta-ink); }
+    a.alerta:hover { border-color: var(--danger); }
     .alerta b { font-weight: 700; }
     .alerta .ver { margin-left: auto; font-weight: 600; }
-    .ticket.alert { border-color: #f0c9c7; box-shadow: 0 0 0 1px #f0c9c7; }
-    .ticket.alert .pos { background: var(--alta-bg); }
-    .ticket.alert .pos .n { color: var(--alta-ink); }
-    .tag.cat { background: #e4f0e6; color: #2f6b3d; }
+    .ticket.atencao { border-color: var(--warning); box-shadow: 0 0 0 1px var(--warning); }
+    .ticket.atencao .pos { background: var(--warning); }
+    .ticket.atencao .pos .n { color: var(--warning-ink); }
+    .ticket.critico { border-color: var(--danger); box-shadow: 0 0 0 1px var(--danger); }
+    .ticket.critico .pos { background: var(--danger); }
+    .ticket.critico .pos .n { color: var(--danger-ink); }
+    .tag.cat { background: var(--accent-bg); color: var(--accent-ink); }
     /* fechados ficam lado a lado como botões; o que abrir ocupa a linha toda */
     .tools { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 11px; }
     details.tool { flex: 0 0 auto; }
     details.tool[open] { flex: 1 1 100%; }
     details.tool > summary {
         cursor: pointer; list-style: none; display: inline-block;
-        background: #fff; border: 1px solid var(--line); border-radius: 8px;
+        background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
         padding: 6px 11px; font-size: 13px; font-weight: 550; color: var(--ink);
     }
     details.tool > summary::-webkit-details-marker { display: none; }
-    details.tool > summary:hover { border-color: #b9c3ce; }
+    details.tool > summary:hover { border-color: var(--line-strong); }
     details.tool[open] > summary { border-color: var(--signal); color: var(--signal); }
     details.tool .painel {
-        margin-top: 11px; padding: 13px; background: #f8fafc;
+        margin-top: 11px; padding: 13px; background: var(--surface-soft);
         border: 1px solid var(--line); border-radius: 10px;
     }
     details.tool .painel label:first-of-type { margin-top: 0; }
@@ -1010,7 +1040,7 @@ CSS = """
     .etapa-cab { margin-bottom: 18px; }
     .etapa-cab .passo {
         display: inline-block; font-size: 10.5px; font-weight: 700; letter-spacing: .08em;
-        text-transform: uppercase; color: var(--signal); background: #e8eeff;
+        text-transform: uppercase; color: var(--signal); background: var(--surface-soft);
         border-radius: 999px; padding: 3px 10px; margin-bottom: 9px;
     }
     .etapa-cab h2 { font-size: 19px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
@@ -1018,16 +1048,17 @@ CSS = """
     form.periodos { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 18px; }
     .chip {
         font: inherit; font-size: 13px; font-weight: 550; cursor: pointer;
-        background: #fff; border: 1px solid var(--line); border-radius: 999px;
+        background: var(--surface); border: 1px solid var(--line); border-radius: 999px;
         padding: 6px 14px; color: var(--muted);
     }
-    .chip:hover { border-color: #b9c3ce; color: var(--ink); }
-    .chip.on { background: var(--signal); border-color: var(--signal); color: #fff; }
+    .chip:hover { border-color: var(--line-strong); color: var(--ink); }
+    .chip.on { background: var(--signal); border-color: var(--signal); color: var(--surface); }
     .hero-card {
         background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+        border-top: 3px solid var(--accent);
         padding: 22px 24px; margin-bottom: 14px;
     }
-    .hero-num { font-size: 52px; line-height: 1; font-weight: 650; letter-spacing: -0.03em; }
+    .hero-num { color: var(--signal-active); font-size: 52px; line-height: 1; font-weight: 650; letter-spacing: -0.03em; }
     .hero-lbl { color: var(--muted); font-size: 13.5px; margin-top: 6px; }
     .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(178px, 1fr)); gap: 12px; margin-bottom: 14px; }
     .tile { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 15px 17px; }
@@ -1038,7 +1069,7 @@ CSS = """
     .viz-card h3 { font-size: 14.5px; margin: 0; font-weight: 620; }
     .viz-sub { color: var(--muted); font-size: 12.5px; margin: 3px 0 14px; }
     .viz { width: 100%; height: auto; display: block; overflow: visible; }
-    .viz-vazio { color: var(--muted); font-size: 13px; text-align: center; padding: 26px 10px; background: #fafbfc; border: 1px dashed var(--line); border-radius: 10px; margin: 0; }
+    .viz-vazio { color: var(--muted); font-size: 13px; text-align: center; padding: 26px 10px; background: var(--surface-soft); border: 1px dashed var(--line); border-radius: 10px; margin: 0; }
     .viz-dupla { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
     @media (max-width: 760px) { .viz-dupla { grid-template-columns: 1fr; } }
     .viz-leg { display: flex; gap: 15px; flex-wrap: wrap; margin-bottom: 10px; }
@@ -1052,7 +1083,7 @@ CSS = """
     table.tab tr:last-child td { border-bottom: none; }
     .grupo { margin-bottom: 34px; }
     .grupo p.hint { color: var(--muted); font-size: 13px; margin: -4px 0 12px; }
-    .grupo .badge { color: var(--alta-ink); font-weight: 700; }
+    .grupo .badge { color: var(--danger); font-weight: 700; }
     .assign { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 12px;
               padding-top: 12px; border-top: 1px dashed var(--line); }
     .assign input { width: auto; flex: 1 1 130px; padding: 6px 9px; font-size: 13px; }
@@ -1060,7 +1091,7 @@ CSS = """
     .assign .btn { padding: 6px 11px; font-size: 13px; }
     .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 13px; }
     form.inline { display: inline; margin: 0; }
-    .empty { border: 1px dashed var(--line); border-radius: 12px; padding: 30px 20px; text-align: center; color: var(--muted); background: #fafbfc; }
+    .empty { border: 1px dashed var(--line); border-radius: 12px; padding: 30px 20px; text-align: center; color: var(--muted); background: var(--surface-soft); }
     details.done { margin-top: 30px; }
     details.done > summary { cursor: pointer; font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; list-style: none; }
     details.done > summary::-webkit-details-marker { display: none; }
@@ -1072,13 +1103,13 @@ CSS = """
     .done-row .who { color: var(--muted); }
     .done-row .txt { flex: 1; }
     .done-row s { color: var(--muted); text-decoration-color: var(--line); }
-    .tag.nota { background: #fdf0d5; color: #8a5600; }
+    .tag.nota { background: var(--rating-bg); color: var(--rating-ink); }
 
     /* compartilhar: link de avaliação de um item concluído */
     details.share > summary { cursor: pointer; font-size: 12px; color: var(--signal-ink); list-style: none; white-space: nowrap; }
     details.share > summary::-webkit-details-marker { display: none; }
     .share-box { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; padding: 8px 4px 4px; }
-    .share-box input { flex: 1 1 260px; width: auto; padding: 6px 9px; font-size: 12.5px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #f7f9fb; }
+    .share-box input { flex: 1 1 260px; width: auto; padding: 6px 9px; font-size: 12.5px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--surface-soft); }
     .share-box .btn { padding: 6px 11px; font-size: 12.5px; }
     .share-box .obs { flex: 1 1 100%; color: var(--muted); font-size: 12.5px; margin: 0; }
 
@@ -1095,11 +1126,11 @@ CSS = """
     .rate span { display: block; text-align: center; border: 1px solid var(--line); border-radius: 10px; padding: 10px 6px; background: var(--surface); }
     .rate b { display: block; font-size: 19px; line-height: 1.3; }
     .rate small { color: var(--muted); font-size: 11.5px; }
-    .rate input:checked + span { border-color: var(--signal); box-shadow: 0 0 0 2px rgba(47,94,224,.18); background: #f3f6ff; }
+    .rate input:checked + span { border-color: var(--signal); box-shadow: 0 0 0 2px rgba(var(--signal-rgb),.18); background: var(--surface-soft); }
     .rate input:focus-visible + span { outline: 2px solid var(--signal); outline-offset: 2px; }
     .rate input:checked + span small { color: var(--signal-ink); }
-    .obrigado { border: 1px solid var(--live-ink); background: var(--live-bg); color: var(--live-ink); border-radius: 12px; padding: 12px 16px; font-size: 14px; margin-bottom: 18px; }
-    .erro { border: 1px solid var(--alta-ink); background: var(--alta-bg); color: var(--alta-ink); border-radius: 12px; padding: 12px 16px; font-size: 14px; margin-bottom: 18px; }
+    .obrigado { border: 1px solid var(--success); background: var(--live-bg); color: var(--live-ink); border-radius: 12px; padding: 12px 16px; font-size: 14px; margin-bottom: 18px; }
+    .erro { border: 1px solid var(--danger); background: var(--alta-bg); color: var(--alta-ink); border-radius: 12px; padding: 12px 16px; font-size: 14px; margin-bottom: 18px; }
     .rate.tipos label { flex: 1 1 210px; display: flex; }
     .rate.tipos span { text-align: left; padding: 12px 14px; flex: 1; }
     .rate.tipos b { font-size: 15px; }
@@ -1120,7 +1151,7 @@ CSS = """
     ul.andamento li::before { content: ""; position: absolute; left: -5px; top: 5px; width: 8px; height: 8px; border-radius: 50%; background: var(--signal); }
     ul.andamento .qdo { color: var(--muted); font-size: 12px; }
     ul.andamento p { margin: 2px 0 0; font-size: 14px; }
-"""
+""".replace("__VARIAVEIS_DE_COR__", gerar_variaveis_css("        "))
 
 
 from views.abrir.pagina import configurar as configurar_abrir
@@ -1156,6 +1187,25 @@ configurar_abrir(_contexto_views)
 configurar_avaliar(_contexto_views)
 configurar_painel(_contexto_views)
 configurar_filas(_contexto_views)
+configurar_api({
+    "filas": FILAS,
+    "get_db": get_db,
+    "novo_token": novo_token,
+    "quando": quando,
+})
+configurar_kanban({
+    "buscar_alertas": buscar_alertas,
+    "canonizar": canonizar,
+    "filas": FILAS,
+    "get_db": get_db,
+    "normalizar": normalizar,
+    "quando": quando,
+    "render_abas": render_abas,
+    "shell": shell,
+    "status_atendimento": STATUS_ATENDIMENTO,
+    "status_concluido": STATUS_CONCLUIDO,
+    "status_fila": STATUS_FILA,
+})
 
 
 
@@ -1188,6 +1238,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         url = urlparse(self.path)
+        if atender_get_api(self, url):
+            return
+        if atender_get_kanban(self, url):
+            return
         imagens = {PATH_LOGO: LOGO_PATH, PATH_ICONE: ICONE_PATH}
         if url.path in imagens:
             self._send_png(imagens[url.path])
@@ -1228,11 +1282,17 @@ class Handler(BaseHTTPRequestHandler):
         self._send_html(rotas[url.path](filtros))
 
     def do_POST(self):
+        url = urlparse(self.path)
+        if atender_post_api(self, url):
+            return
+        if atender_post_kanban(self, url):
+            return
+
+        caminho = url.path
+
         length = int(self.headers.get("Content-Length", 0))
         raw = self.rfile.read(length).decode("utf-8") if length else ""
         form = parse_qs(raw, keep_blank_values=True)
-
-        caminho = urlparse(self.path).path
 
         # abertura pública: erro volta pro formulário, sucesso vai pro recibo
         if caminho == PATH_ABRIR:

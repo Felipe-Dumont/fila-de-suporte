@@ -185,9 +185,9 @@ def render_painel(dias_periodo: int) -> str:
     graf_quem = svg_barras_h(m["por_solicitante"][:8], largura=330)
     tab_quem = tabela_viz(["Solicitante", "Concluídos"], m["por_solicitante"] or [("—", 0)])
 
-    # avaliações: nota mais alta = azul mais escuro da rampa
+    # avaliações seguem a paleta institucional, separada da escala de atraso
     n_aval = len(m["avaliadas"])
-    graf_notas = svg_barras_h(m["dist_notas"], cores=list(reversed(RAMPA_IDADE)),
+    graf_notas = svg_barras_h(m["dist_notas"], cores=list(reversed(RAMPA_AVALIACAO)),
                               largura=330)
     tab_notas = tabela_viz(["Nota", "Avaliações"], m["dist_notas"])
     graf_pessoa = svg_barras_h(m["nota_por_pessoa"][:8], largura=330)
@@ -302,7 +302,7 @@ def render_painel(dias_periodo: int) -> str:
     </section>"""
 
     # ---------- etapa 2: previsão ----------
-    graf_idade = svg_barras_h(m["idades"], cores=list(RAMPA_IDADE))
+    graf_idade = svg_barras_h(m["idades"], cores=list(RAMPA_ATRASO))
     tab_idade = tabela_viz(["Faixa de espera", "Abertos"], m["idades"])
 
     ag_rot = [r for r, _ in m["agenda"]]
@@ -347,7 +347,13 @@ def render_painel(dias_periodo: int) -> str:
         <div class="viz-card">
             <h3>Envelhecimento da fila</h3>
             <p class="viz-sub">Há quanto tempo cada item aberto está esperando.
-               Quanto mais escuro, mais tempo parado.</p>
+               Azul indica acompanhamento, âmbar pede atenção e vermelho marca
+               atraso crítico.</p>
+            {legenda([
+                ("Acompanhamento", RAMPA_ATRASO[1]),
+                ("Atenção", RAMPA_ATRASO[2]),
+                ("Crítico", RAMPA_ATRASO[4]),
+            ])}
             {graf_idade}
             {tab_idade}
         </div>

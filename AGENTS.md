@@ -5,12 +5,15 @@ seção 2 ("Regras do projeto") e a seção 5 ("Banco de dados versionado no Git
 
 Resumo das restrições inegociáveis:
 
-1. **Arquivo único**: todo o código fica em `app.py`. Não quebre em módulos.
+1. **Estrutura modular**: núcleo e servidor em `app.py`, telas em `views/`,
+   configurações em `configuracao/` e rotas HTTP da API em `rotas/`.
 2. **Zero dependências**: só a biblioteca padrão do Python. Nada de `pip install`,
    nada de `requirements.txt`, nada de framework.
-3. **Sem JavaScript**: HTML + CSS puros, `<form>` e `<details>`.
+3. **JavaScript mínimo**: use HTML + CSS e formulários por padrão. JS é reservado
+   às interações que dependem dele, como arrastar cards no Kanban e copiar links.
 4. **SQL sempre parametrizado** (`?`) e **toda saída escapada** com o helper `e()`.
-5. **PRG**: POST responde `303` para um GET.
+5. **PRG nas telas**: POST de formulário responde `303`; APIs e movimentos do Kanban
+   respondem JSON.
 6. **Português** em código, comentários e UI.
 7. **UTC no banco, `America/Sao_Paulo` na tela.**
 8. **Prioridade não fura a fila** — a ordem é sempre de chegada.
@@ -20,6 +23,6 @@ Resumo das restrições inegociáveis:
 Verificação (não há testes nem CI):
 
 ```bash
-python3 -m py_compile app.py    # erro de sintaxe
-python3 app.py                  # sobe em http://localhost:8000 e confira a tela afetada
+python3 -m py_compile app.py configuracao/*.py rotas/*.py views/*/*.py
+python3 app.py                  # usa FILA_PORT do .env; confira a tela afetada
 ```

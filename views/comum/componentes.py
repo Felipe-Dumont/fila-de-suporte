@@ -38,7 +38,7 @@ def render_notas(s: sqlite3.Row, notas: list, ocultos: str) -> str:
                     <div class="txt">{e(n['texto'])}</div>
                 </div>"""
     if not itens:
-        itens = '<p class="hint" style="margin:0;color:#64717f;font-size:13px;">Nada registrado ainda.</p>'
+        itens = '<p class="hint" style="margin:0;color:var(--muted);font-size:13px;">Nada registrado ainda.</p>'
 
     return f"""
             <details class="tool">
@@ -106,7 +106,8 @@ def render_ticket(pos: int, s: sqlite3.Row, ocultos: str, fila: str,
     em_atend = s["status"] == STATUS_ATENDIMENTO
     demanda = fila == FILA_DEMANDAS
 
-    alerta = em_alerta(s, fila)
+    nivel = nivel_atraso(s, fila)
+    alerta = bool(nivel)
 
     eyebrow = '<div class="eyebrow">Próximo</div>' if is_next else ""
     desc = f'<p class="desc">{e(s["descricao"])}</p>' if s["descricao"] else ""
@@ -114,9 +115,14 @@ def render_ticket(pos: int, s: sqlite3.Row, ocultos: str, fila: str,
     if not alerta:
         alerta_tag = ""
     elif demanda:
-        alerta_tag = '<span class="tag alta">⚠ Venceu sem iniciar</span>'
+        classe_alerta = "critical" if nivel == "critico" else "due"
+        alerta_tag = f'<span class="tag {classe_alerta}">⚠ Venceu sem iniciar</span>'
     else:
-        alerta_tag = f'<span class="tag alta">⚠ Parada há {duracao(s["criado_em"])}</span>'
+        classe_alerta = "critical" if nivel == "critico" else "due"
+        alerta_tag = (
+            f'<span class="tag {classe_alerta}">'
+            f'⚠ Parada há {duracao(s["criado_em"])}</span>'
+        )
 
     if em_atend:
         status_tag = f'<span class="tag live">{FILAS[fila]["tag_ativo"]}</span>'
@@ -171,7 +177,7 @@ def render_ticket(pos: int, s: sqlite3.Row, ocultos: str, fila: str,
             </form>"""
 
     return f"""
-    <article class="ticket {'next' if is_next else ''} {'alert' if alerta else ''}">
+    <article class="ticket {'next' if is_next else ''} {nivel}">
         <div class="pos"><span class="n mono">{pos}</span></div>
         <div class="body">
             {eyebrow}
@@ -282,6 +288,9 @@ def render_abas(atual: str, por_fila: dict, n_alertas: int) -> str:
     )
     abas += (
         f'<a class="{"on" if atual == PATH_PAINEL else ""}" href="{PATH_PAINEL}">Painel</a>'
+    )
+    abas += (
+        f'<a class="{"on" if atual == PATH_KANBAN else ""}" href="{PATH_KANBAN}">Kanban</a>'
     )
     return abas
 

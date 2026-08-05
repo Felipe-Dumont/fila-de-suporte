@@ -4,6 +4,10 @@ __pycache__/
 .venv/
 venv/
 
+# Configuração local e segredos
+.env
+!.env.example
+
 # SQLite: o data.sqlite É versionado de propósito (ver README, "Banco de dados").
 # Já os arquivos do WAL são estado transitório de uma execução — nunca versionar.
 *.sqlite-wal
