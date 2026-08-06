@@ -7,7 +7,7 @@ ETAPAS = (
     ("pendente", "Pendentes sem atribuição", "Aguardando alguém assumir", "pendente"),
     ("atribuido", "Atribuídos", "Com responsável, ainda não iniciados", "atribuido"),
     ("andamento", "Em andamento", "Atendimento iniciado", "andamento"),
-    ("concluido", "Concluídos", "Atendimentos finalizados", "concluido"),
+    ("concluido", "Concluídos", "Finalizados nos últimos 5 dias", "concluido"),
 )
 
 
@@ -183,8 +183,8 @@ ESTILOS_KANBAN = """
 .kanban-legenda { display:flex; justify-content:space-between; align-items:center; gap:12px; color:var(--muted); font-size:12px; margin:0 2px 10px; }
 .kanban-legenda b { color:var(--ink); }
 .pi-arraste { color:var(--signal); font-style:normal; letter-spacing:-3px; margin-right:5px; }
-.kanban-board { display:grid; grid-template-columns:repeat(4,minmax(285px,1fr)); gap:12px; align-items:start; overflow-x:auto; padding:1px 1px 18px; }
-.kanban-coluna { min-width:285px; background:var(--surface-muted); border:1px solid var(--line); border-radius:14px; overflow:hidden; }
+.kanban-board { display:grid; grid-template-columns:repeat(4,minmax(285px,1fr)); gap:12px; align-items:stretch; height:clamp(480px,calc(100vh - 240px),800px); overflow-x:auto; overflow-y:hidden; padding:1px 1px 12px; overscroll-behavior:contain; }
+.kanban-coluna { display:flex; flex-direction:column; min-width:285px; min-height:0; background:var(--surface-muted); border:1px solid var(--line); border-radius:14px; overflow:hidden; }
 .kanban-coluna-topo { display:flex; justify-content:space-between; align-items:flex-start; gap:10px; padding:15px; border-top:4px solid var(--warning); background:var(--surface); }
 .kanban-coluna.atribuido .kanban-coluna-topo { border-top-color:var(--signal); }
 .kanban-coluna.andamento .kanban-coluna-topo { border-top-color:var(--info); }
@@ -192,7 +192,11 @@ ESTILOS_KANBAN = """
 .kanban-coluna-topo h2 { margin:0; color:var(--ink); font-size:14px; }
 .kanban-coluna-topo p { margin:2px 0 0; color:var(--muted); font-size:11px; }
 .kanban-contador { min-width:27px; padding:3px 7px; border-radius:999px; color:var(--muted); background:var(--surface-muted); font-size:11px; font-weight:700; text-align:center; }
-.kanban-cards { min-height:210px; display:flex; flex-direction:column; gap:9px; padding:10px; transition:background .15s; }
+.kanban-cards { min-height:0; flex:1; display:flex; flex-direction:column; gap:9px; padding:10px; overflow-y:auto; overscroll-behavior:contain; scrollbar-gutter:stable; transition:background .15s; }
+.kanban-cards::-webkit-scrollbar { width:9px; }
+.kanban-cards::-webkit-scrollbar-track { background:var(--surface-muted); }
+.kanban-cards::-webkit-scrollbar-thumb { background:var(--line-strong); border:2px solid var(--surface-muted); border-radius:999px; }
+.kanban-cards::-webkit-scrollbar-thumb:hover { background:var(--muted); }
 .kanban-coluna.arrastando-sobre .kanban-cards { background:var(--primary-soft,var(--surface-soft)); outline:2px dashed var(--signal); outline-offset:-6px; }
 .kanban-card { cursor:grab; padding:14px; background:var(--surface); border:1px solid var(--line); border-radius:11px; box-shadow:0 2px 7px rgba(45,33,51,.05); transition:transform .15s,box-shadow .15s,opacity .15s; }
 .kanban-card:hover { transform:translateY(-1px); box-shadow:0 7px 18px rgba(45,33,51,.09); }
@@ -229,7 +233,7 @@ ESTILOS_KANBAN = """
 .kanban-toast.visivel { opacity:1; transform:translateY(0); }
 .kanban-toast.erro { background:var(--danger); color:var(--danger-ink); }
 @media (max-width:1050px) { .kanban-filtros { grid-template-columns:repeat(2,minmax(0,1fr)); } .kanban-filtro-acoes { align-self:end; } }
-@media (max-width:620px) { .kanban-shell { width:calc(100vw - 22px); } .kanban-filtros { grid-template-columns:1fr; } .kanban-board { grid-template-columns:repeat(4,86vw); } .kanban-filtro-acoes .btn { flex:1; justify-content:center; } }
+@media (max-width:620px) { .kanban-shell { width:calc(100vw - 22px); } .kanban-filtros { grid-template-columns:1fr; } .kanban-board { grid-template-columns:repeat(4,86vw); height:clamp(440px,calc(100vh - 210px),720px); } .kanban-filtro-acoes .btn { flex:1; justify-content:center; } }
 """
 
 

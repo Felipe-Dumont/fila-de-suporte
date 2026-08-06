@@ -199,9 +199,9 @@ As telas estão organizadas assim:
 | GET  | `/`            | Fila de suporte (aceita `?q=&status=&prio=&resp=&cat=`) |
 | GET  | `/demandas`    | Fila de demandas (mesmos filtros) |
 | GET  | `/alertas`     | Itens parados nas duas filas |
-| GET  | `/painel`      | Métricas e gráficos (`?dias=7\|30\|90\|0`) |
+| GET  | `/painel`      | Métricas (`?dias=7\|30\|90\|0`, `?data=AAAA-MM-DD`, `?pessoa=Nome`) |
 | GET  | `/concluidos`  | Histórico concluído; aceita `?q=&fila=&resp=&cat=&prio=` |
-| GET  | `/kanban` | Quadro completo; aceita `?q=&fila=&resp=&cat=` |
+| GET  | `/kanban` | Quadro; concluídos dos últimos 5 dias; aceita `?q=&fila=&resp=&cat=` |
 | GET  | `/abrir`       | **Público** — formulário de abertura; `?ok=<token>` = recibo |
 | GET  | `/avaliar?t=`  | **Público** — avaliação do atendimento concluído |
 | GET  | `/api` | **Público** — documentação visual da API |

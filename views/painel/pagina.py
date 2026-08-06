@@ -9,9 +9,9 @@ def configurar(dependencias: dict) -> None:
     )
 
 
-def serie_temporal(concluidos, dias_periodo: int):
+def serie_temporal(concluidos, dias_periodo: int, data_especifica=None):
     """(rótulos, série suporte, série demandas). Vira semanal em período longo."""
-    hoje = datetime.now(LOCAL_TZ).date()
+    hoje = data_especifica or datetime.now(LOCAL_TZ).date()
     dia_de = {}
     for s in concluidos:
         d = _parse_utc(s["concluido_em"]).astimezone(LOCAL_TZ).date()
@@ -39,16 +39,34 @@ def serie_temporal(concluidos, dias_periodo: int):
     return rotulos, sup, dem
 
 
-def coletar_metricas(conn: sqlite3.Connection, dias_periodo: int) -> dict:
+def coletar_metricas(
+    conn: sqlite3.Connection,
+    dias_periodo: int,
+    data_especifica=None,
+) -> dict:
     agora = datetime.now(timezone.utc)
     hoje = datetime.now(LOCAL_TZ).date()
 
     extra, args = "", []
-    if dias_periodo:
+    if data_especifica:
+        inicio_local = datetime(
+            data_especifica.year,
+            data_especifica.month,
+            data_especifica.day,
+            tzinfo=LOCAL_TZ,
+        )
+        fim_local = inicio_local + timedelta(days=1)
+        extra = " AND concluido_em >= ? AND concluido_em < ?"
+        args = [
+            inicio_local.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+            fim_local.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+        ]
+    elif dias_periodo:
         extra = " AND concluido_em >= ?"
         args = [(agora - timedelta(days=dias_periodo)).strftime("%Y-%m-%d %H:%M:%S")]
     concluidos = conn.execute(
-        "SELECT * FROM solicitacoes WHERE status = ? AND concluido_em IS NOT NULL" + extra,
+        "SELECT * FROM solicitacoes WHERE status = ? AND concluido_em IS NOT NULL"
+        + extra + " ORDER BY concluido_em DESC, id DESC",
         [STATUS_CONCLUIDO] + args,
     ).fetchall()
     abertos = conn.execute(
@@ -118,7 +136,9 @@ def coletar_metricas(conn: sqlite3.Connection, dias_periodo: int) -> dict:
     # Vazão e projeção. A janela é o período escolhido; em "Tudo" é o tempo
     # real de histórico. Menos de uma semana de janela não vira ritmo: 4 itens
     # fechados no mesmo dia dariam "28/semana", que é ruído, não tendência.
-    if dias_periodo:
+    if data_especifica:
+        janela = 1.0
+    elif dias_periodo:
         janela = float(dias_periodo)
     elif concluidos:
         inicio = min(_parse_utc(s["criado_em"]) for s in concluidos)
@@ -142,14 +162,22 @@ def coletar_metricas(conn: sqlite3.Connection, dias_periodo: int) -> dict:
         "sem_previsao": sem_previsao, "carga_dev": carga_dev,
         "vazao": vazao, "projecao": projecao, "confiavel": confiavel,
         "janela": janela, "mais_antigo": mais_antigo,
-        "serie": serie_temporal(concluidos, dias_periodo),
+        "serie": serie_temporal(
+            concluidos,
+            1 if data_especifica else dias_periodo,
+            data_especifica,
+        ),
     }
 
 
-def render_painel(dias_periodo: int) -> str:
+def render_painel(
+    dias_periodo: int,
+    data_especifica=None,
+    pessoa_selecionada: str = "",
+) -> str:
     conn = get_db()
     try:
-        m = coletar_metricas(conn, dias_periodo)
+        m = coletar_metricas(conn, dias_periodo, data_especifica)
         al = buscar_alertas(conn)
         por_fila = dict(
             conn.execute(
@@ -157,10 +185,26 @@ def render_painel(dias_periodo: int) -> str:
                 (STATUS_FILA, STATUS_ATENDIMENTO),
             ).fetchall()
         )
+        responsaveis = [
+            row[0] for row in conn.execute(
+                "SELECT DISTINCT dev FROM solicitacoes WHERE dev <> '' "
+                "ORDER BY dev COLLATE NOCASE"
+            )
+        ]
     finally:
         conn.close()
 
+    pessoa_selecionada = (
+        pessoa_selecionada if pessoa_selecionada in responsaveis else ""
+    )
     rot_periodo = dict(PERIODOS)[dias_periodo]
+    rotulo_periodo = (
+        data_especifica.strftime("dia %d/%m/%Y")
+        if data_especifica else (
+            "todo o histórico" if not dias_periodo
+            else "últimos " + rot_periodo.lower()
+        )
+    )
     n_concl = len(m["concluidos"])
     n_abertos = len(m["abertos"])
 
@@ -171,7 +215,10 @@ def render_painel(dias_periodo: int) -> str:
 
     # ---------- etapa 1: feito ----------
     rotulos, sup, dem = m["serie"]
-    granularidade = "por dia" if dias_periodo and dias_periodo <= 30 else "por semana"
+    granularidade = (
+        "no dia" if data_especifica
+        else ("por dia" if dias_periodo and dias_periodo <= 30 else "por semana")
+    )
     graf_tempo = svg_colunas(rotulos, [sup, dem], [COR_SUPORTE, COR_DEMANDAS],
                              ["Suporte", "Demandas"])
     tab_tempo = tabela_viz(
@@ -232,17 +279,29 @@ def render_painel(dias_periodo: int) -> str:
             <p>Retrospectiva do que saiu da fila. Tudo abaixo respeita o período escolhido.</p>
         </div>
 
+        <div class="painel-filtros-periodo">
         <form class="periodos" method="get" action="{PATH_PAINEL}">
+            {f'<input type="hidden" name="pessoa" value="{e(pessoa_selecionada)}">'
+             if pessoa_selecionada else ""}
             {"".join(
-                f'<button class="chip{" on" if d == dias_periodo else ""}" '
+                f'<button class="chip{" on" if not data_especifica and d == dias_periodo else ""}" '
                 f'name="dias" value="{d}" type="submit">{r}</button>'
                 for d, r in PERIODOS)}
         </form>
+        <form class="data-painel" method="get" action="{PATH_PAINEL}">
+            {f'<input type="hidden" name="pessoa" value="{e(pessoa_selecionada)}">'
+             if pessoa_selecionada else ""}
+            <label for="painel-data">Dia específico</label>
+            <input id="painel-data" name="data" type="date"
+                   value="{data_especifica.isoformat() if data_especifica else ''}"
+                   max="{datetime.now(LOCAL_TZ).date().isoformat()}">
+            <button class="btn ghost" type="submit">Aplicar</button>
+        </form>
+        </div>
 
         <div class="hero-card">
             <div class="hero-num">{n_concl}</div>
-            <div class="hero-lbl">concluídos · {"todo o histórico" if not dias_periodo
-                else "últimos " + rot_periodo.lower()}</div>
+            <div class="hero-lbl">concluídos · {rotulo_periodo}</div>
         </div>
 
         <div class="kpis">
@@ -374,11 +433,111 @@ def render_painel(dias_periodo: int) -> str:
         </div>
     </section>"""
 
+    # ---------- etapa 3: visão individual ----------
+    opcoes_pessoa = '<option value="">Selecione um responsável</option>' + "".join(
+        f'<option value="{e(nome)}"'
+        f'{" selected" if nome == pessoa_selecionada else ""}>{e(nome)}</option>'
+        for nome in responsaveis
+    )
+    filtro_periodo_individual = (
+        f'<input type="hidden" name="data" value="{data_especifica.isoformat()}">'
+        if data_especifica else f'<input type="hidden" name="dias" value="{dias_periodo}">'
+    )
+
+    if pessoa_selecionada:
+        concluidos_pessoa = [
+            chamado for chamado in m["concluidos"]
+            if chamado["dev"] == pessoa_selecionada
+        ]
+        abertos_pessoa = [
+            chamado for chamado in m["abertos"]
+            if chamado["dev"] == pessoa_selecionada
+        ]
+        duracoes_pessoa = [
+            (_parse_utc(chamado["concluido_em"]) - _parse_utc(chamado["criado_em"]))
+            .total_seconds() / 60
+            for chamado in concluidos_pessoa
+        ]
+        media_pessoa = (
+            sum(duracoes_pessoa) / len(duracoes_pessoa) if duracoes_pessoa else None
+        )
+        avaliacoes_pessoa = [
+            chamado["nota"] for chamado in concluidos_pessoa if chamado["nota"]
+        ]
+        nota_pessoa = (
+            sum(avaliacoes_pessoa) / len(avaliacoes_pessoa)
+            if avaliacoes_pessoa else None
+        )
+        suporte_pessoa = sum(
+            1 for chamado in concluidos_pessoa if chamado["fila"] == FILA_SUPORTE
+        )
+        demandas_pessoa = len(concluidos_pessoa) - suporte_pessoa
+        linhas_pessoa = "".join(
+            f"""<tr>
+                <td class="mono">{quando(chamado["concluido_em"])}</td>
+                <td>#{chamado["id"]} {e(chamado["assunto"][:52])}</td>
+                <td>{e(chamado["solicitante"])}</td>
+                <td>{e(FILAS[chamado["fila"]]["rotulo"])}</td>
+                <td>{fmt_dur(
+                    (_parse_utc(chamado["concluido_em"]) - _parse_utc(chamado["criado_em"]))
+                    .total_seconds() / 60
+                )}</td>
+                <td>{f'{chamado["nota"]}/5' if chamado["nota"] else "—"}</td>
+            </tr>"""
+            for chamado in concluidos_pessoa[:15]
+        )
+        detalhe_pessoa = f"""
+            <div class="kpis">
+                {tile("Concluídos", len(concluidos_pessoa), rotulo_periodo)}
+                {tile("Abertos agora", len(abertos_pessoa), "atribuídos a esta pessoa")}
+                {tile("Tempo médio", fmt_dur(media_pessoa), "da abertura à conclusão")}
+                {tile(
+                    "Nota média",
+                    f'{nota_pessoa:.1f}/5'.replace('.', ',') if nota_pessoa else "—",
+                    f'{len(avaliacoes_pessoa)} '
+                    f'{"avaliação" if len(avaliacoes_pessoa) == 1 else "avaliações"}',
+                )}
+            </div>
+            <div class="viz-card">
+                <h3>Atendimentos de {e(pessoa_selecionada)}</h3>
+                <p class="viz-sub">
+                    {suporte_pessoa} de Suporte · {demandas_pessoa} de Demandas ·
+                    exibindo até 15 conclusões mais recentes.
+                </p>
+                {('<table class="tab"><thead><tr><th>Concluído em</th><th>Chamado</th>'
+                  '<th>Solicitante</th><th>Fila</th><th>Tempo</th><th>Nota</th></tr></thead>'
+                  f'<tbody>{linhas_pessoa}</tbody></table>')
+                 if linhas_pessoa else _sem_dados("Nenhum atendimento concluído no período.")}
+            </div>
+        """
+    else:
+        detalhe_pessoa = _sem_dados(
+            "Selecione um responsável para consultar seus indicadores individuais."
+        )
+
+    individual = f"""
+    <section class="etapa">
+        <div class="etapa-cab">
+            <span class="passo">Etapa 3</span>
+            <h2>Visão individual</h2>
+            <p>Indicadores do responsável selecionado dentro de {rotulo_periodo}.</p>
+        </div>
+        <form class="filtro-individual" method="get" action="{PATH_PAINEL}">
+            {filtro_periodo_individual}
+            <label for="painel-pessoa">Responsável</label>
+            <select id="painel-pessoa" name="pessoa" onchange="this.form.requestSubmit()">
+                {opcoes_pessoa}
+            </select>
+            <button class="btn ghost" type="submit">Consultar</button>
+        </form>
+        {detalhe_pessoa}
+    </section>"""
+
     return shell(
         "Painel",
         "Duas etapas: o que já foi feito e o que vem pela frente.",
         f'<div class="counts"><b>{n_concl}</b> concluídos · <b>{n_abertos}</b> abertos</div>',
         render_abas(PATH_PAINEL, por_fila, al["total"]),
         render_banner(al, aqui=False),
-        feito + previsao,
+        feito + previsao + individual,
     )

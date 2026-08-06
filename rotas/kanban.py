@@ -1,6 +1,7 @@
 """Rotas de consulta e movimentação do quadro Kanban."""
 
 import json
+from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs
 
 from views.kanban.pagina import render_kanban
@@ -10,6 +11,7 @@ PATH_KANBAN = "/kanban"
 PATH_MOVER_KANBAN = "/kanban/mover"
 DESTINOS = ("pendente", "atribuido", "andamento", "concluido")
 LIMITE_PAYLOAD_BYTES = 16 * 1024
+DIAS_CONCLUIDOS_KANBAN = 5
 
 _dependencias = {}
 
@@ -47,8 +49,11 @@ def _ler_filtros(query: str) -> dict:
 def _buscar_dados(filtros: dict) -> tuple:
     conn = _dependencias["get_db"]()
     try:
-        condicoes = []
-        argumentos = []
+        corte_concluidos = (
+            datetime.now(timezone.utc) - timedelta(days=DIAS_CONCLUIDOS_KANBAN)
+        ).strftime("%Y-%m-%d %H:%M:%S")
+        condicoes = ["(status <> ? OR concluido_em >= ?)"]
+        argumentos = [_dependencias["status_concluido"], corte_concluidos]
         if filtros["q"]:
             alvo = _dependencias["normalizar"](filtros["q"])
             alvo = alvo.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")

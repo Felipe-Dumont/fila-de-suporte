@@ -1207,7 +1207,28 @@ __VARIAVEIS_DE_COR__
     }
     .etapa-cab h2 { font-size: 19px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
     .etapa-cab p { color: var(--muted); font-size: 13.5px; margin: 4px 0 0; }
-    form.periodos { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 18px; }
+    .painel-filtros-periodo {
+        display: flex; align-items: flex-end; justify-content: space-between;
+        gap: 14px; flex-wrap: wrap; margin: 0 0 18px;
+    }
+    form.periodos { display: flex; gap: 6px; flex-wrap: wrap; margin: 0; }
+    form.data-painel { display: flex; align-items: flex-end; gap: 7px; flex-wrap: wrap; }
+    form.data-painel label, form.filtro-individual label {
+        margin: 0; color: var(--muted); font-size: 12px; font-weight: 600;
+    }
+    form.data-painel input { width: auto; padding: 6px 9px; font-size: 13px; }
+    form.data-painel .btn { white-space: nowrap; }
+    form.filtro-individual {
+        display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
+        margin: 0 0 18px; padding: 14px; border: 1px solid var(--line);
+        border-radius: 12px; background: var(--surface-soft);
+    }
+    form.filtro-individual select { width: min(320px, 100%); }
+    @media (max-width: 620px) {
+        form.data-painel, form.data-painel input, form.data-painel .btn,
+        form.filtro-individual select, form.filtro-individual .btn { width: 100%; }
+        form.data-painel .btn, form.filtro-individual .btn { justify-content: center; }
+    }
     .chip {
         font: inherit; font-size: 13px; font-weight: 550; cursor: pointer;
         background: var(--surface); border: 1px solid var(--line); border-radius: 999px;
@@ -1458,10 +1479,18 @@ class Handler(BaseHTTPRequestHandler):
             self._send_html(render_alertas())
             return
         if url.path == PATH_PAINEL:
-            bruto = parse_qs(url.query).get("dias", ["30"])[0]
+            parametros = parse_qs(url.query, keep_blank_values=True)
+            bruto = parametros.get("dias", ["30"])[0]
             validos = [d for d, _ in PERIODOS]
             dias = int(bruto) if bruto.isdigit() and int(bruto) in validos else 30
-            self._send_html(render_painel(dias))
+            data_especifica = None
+            try:
+                data_bruta = (parametros.get("data", [""])[0] or "").strip()
+                data_especifica = date.fromisoformat(data_bruta) if data_bruta else None
+            except ValueError:
+                pass
+            pessoa = (parametros.get("pessoa", [""])[0] or "").strip()[:80]
+            self._send_html(render_painel(dias, data_especifica, pessoa))
             return
         if url.path == PATH_CONCLUIDOS:
             self._send_html(render_concluidos_todos(
