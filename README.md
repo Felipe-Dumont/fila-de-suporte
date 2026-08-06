@@ -75,9 +75,10 @@ e atualize este README junto.
    f-strings; os gráficos são **SVG gerado à mão** (`svg_colunas`, `svg_barras_h`). A
    única dependência externa permitida é `psycopg`, usada quando `DATABASE_URL` aponta
    para PostgreSQL. Não introduza outras dependências sem uma decisão explícita.
-3. **JavaScript mínimo e sem build.** A interface usa HTML + CSS e formulários por
-   padrão. JavaScript puro fica reservado a interações que realmente dependem dele,
-   como arrastar cards no Kanban e copiar links. Não introduza dependências ou build.
+3. **JavaScript progressivo e sem build.** A interface usa HTML + CSS e formulários por
+   padrão. JavaScript puro melhora as telas internas com `fetch`, além de cuidar do
+   Kanban e da cópia de links. Sem JavaScript, os formulários continuam funcionando
+   pelo fluxo HTML + PRG. Não introduza dependências ou build.
 4. **Padrão PRG nas telas.** Todo POST de formulário responde `303` redirecionando para
    um GET — nunca renderize HTML direto na resposta de uma ação (exceções: erro de
    validação em `/abrir`, que devolve `400`, a API JSON privada e a movimentação
@@ -111,8 +112,9 @@ e atualize este README junto.
     previsão é *calculada*, nunca digitada.
 13. Quem abre pelo `/abrir` **não escolhe prioridade nem responsável** — isso é da equipe.
     A abertura pública sempre entra como `prioridade = 'normal'`.
-14. **Avaliação nunca é obrigatória.** Item concluído sem nota é normal em toda a
-    aplicação; nada pode quebrar por `nota IS NULL`.
+14. **Avaliação exigida na integração.** Usuários do LocarMais precisam avaliar o
+    chamado concluído sem nota antes de abrir outro. Nas demais entradas, `nota IS NULL`
+    continua sendo um estado válido.
 15. **Anotação nasce privada** (`publica = 0`). Só vira visível ao solicitante por ação
     explícita na fila.
 16. **Canonização de texto livre**: `dev` e `categoria` passam por `canonizar()`, que
@@ -171,6 +173,7 @@ As telas estão organizadas assim:
 | `views/painel/` | métricas e gráficos |
 | `views/abrir/` | abertura pública e confirmação |
 | `views/avaliar/` | acompanhamento e avaliação pública |
+| `views/concluidos/` | histórico unificado de chamados concluídos |
 | `views/filas/` | renderização compartilhada pelas duas filas |
 | `views/comum/` | componentes e cascas compartilhadas |
 | `views/api/` | site visual de documentação da API |
@@ -197,23 +200,30 @@ As telas estão organizadas assim:
 | GET  | `/demandas`    | Fila de demandas (mesmos filtros) |
 | GET  | `/alertas`     | Itens parados nas duas filas |
 | GET  | `/painel`      | Métricas e gráficos (`?dias=7\|30\|90\|0`) |
+| GET  | `/concluidos`  | Histórico concluído; aceita `?q=&fila=&resp=&cat=&prio=` |
 | GET  | `/kanban` | Quadro completo; aceita `?q=&fila=&resp=&cat=` |
 | GET  | `/abrir`       | **Público** — formulário de abertura; `?ok=<token>` = recibo |
 | GET  | `/avaliar?t=`  | **Público** — avaliação do atendimento concluído |
 | GET  | `/api` | **Público** — documentação visual da API |
 | GET  | `/api/documentacao` | Alias da documentação visual |
 | GET  | `/api/openapi.json` | Especificação OpenAPI 3.1 para Postman, Insomnia ou Swagger |
-| GET  | `/api/chamados` | **Privado** — chamados do LocarMais; aceita `?usuario_id=<id>` |
+| GET  | `/api/chamados` | **Privado** — aceita `?usuario_id=<id>&usuario_nome=<nome>` |
 | POST | `/abrir`       | Cria via solicitante → `303` para o recibo |
 | POST | `/avaliar`     | Grava nota → `303` de volta para a página pública |
 | POST | `/api/chamados` | **Privado** — cria chamado identificado com o usuário do LocarMais |
+| POST | `/api/avaliacoes` | **Privado** — avalia um chamado concluído do usuário autenticado |
 | POST | `/kanban/mover` | Atualiza etapa, status e responsável ao mover um card |
 | POST | qualquer outra | `handle_action()` → `303` para a fila (ou para `/alertas` se o form mandar `voltar=/alertas`) |
 
 As duas chamadas da API exigem `Authorization: Bearer <token>`. O backend do LocarMais
 envia a identidade do usuário autenticado; esse dado não é aceito diretamente do
-navegador. Sem `usuario_id`, o GET retorna todos os chamados originados no LocarMais e
-deve ser usado apenas pelo fluxo de Super Admin.
+navegador. Com ID e nome, o GET também inclui chamados manuais sem origem cujo
+solicitante tenha o mesmo nome. Sem os filtros, retorna todos os chamados e deve ser
+usado apenas pelo fluxo de Super Admin.
+
+Cada chamado retorna a situação da avaliação e o andamento público, sem expor o token
+do link externo. O POST de criação retorna `422` quando o mesmo usuário possui um
+chamado concluído sem avaliação.
 
 Ações aceitas em `handle_action()` (campo `action` do form):
 `criar`, `editar`, `atribuir`, `anotar`, `nota_visivel`, `apagar_nota`,

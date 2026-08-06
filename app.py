@@ -76,6 +76,7 @@ PRIORIDADES = ("baixa", "normal", "alta")
 LIMITE_ESPERA_HORAS = 2
 PATH_ALERTAS = "/alertas"
 PATH_PAINEL = "/painel"
+PATH_CONCLUIDOS = "/concluidos"
 
 # Avaliação: página pública, aberta pelo link que o solicitante recebe. Nunca é
 # obrigatória — item concluído sem nota continua normal em toda a aplicação.
@@ -159,6 +160,17 @@ def normalizar(texto: str) -> str:
     """minúsculas e sem acento, pra busca não depender de 'ç' nem de caixa."""
     decomposto = unicodedata.normalize("NFD", texto.lower())
     return "".join(c for c in decomposto if not unicodedata.combining(c))
+
+
+def formatar_iniciais_maiusculas(texto: str) -> str:
+    """Padroniza nomes e categorias sem elevar preposições no meio do texto."""
+    preposicoes = {"a", "as", "da", "das", "de", "do", "dos", "e", "em"}
+    palavras = texto.split()
+    return " ".join(
+        palavra.lower() if indice and palavra.lower() in preposicoes
+        else palavra.title()
+        for indice, palavra in enumerate(palavras)
+    )
 
 
 def novo_token() -> str:
@@ -891,7 +903,9 @@ def handle_action(form: dict) -> None:
     conn = get_db()
     try:
         if action == "criar":
-            solicitante, assunto = g("solicitante"), g("assunto")
+            solicitante = formatar_iniciais_maiusculas(g("solicitante"))
+            categoria = formatar_iniciais_maiusculas(g("categoria"))
+            assunto = g("assunto")
             descricao = g("descricao")
             prioridade = g("prioridade") if g("prioridade") in PRIORIDADES else "normal"
             # responsável existe nas duas filas; previsão só nas demandas
@@ -905,7 +919,7 @@ def handle_action(form: dict) -> None:
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (solicitante, assunto, descricao, prioridade, fila,
                      canonizar(conn, "dev", dev), previsao or None,
-                     canonizar(conn, "categoria", g("categoria")), novo_token()),
+                     canonizar(conn, "categoria", categoria), novo_token()),
                 )
 
         elif action == "editar" and g("id").isdigit():
@@ -1116,6 +1130,28 @@ __VARIAVEIS_DE_COR__
     }
     nav.filas a.on .pill { background: var(--signal); color: var(--surface); }
     nav.filas a .pill.bad { background: var(--danger); color: var(--danger-ink); }
+    .wrap.ajax-carregando { cursor: progress; }
+    .wrap.ajax-carregando::before {
+        content: ""; position: fixed; inset: 0; z-index: 9998;
+        background: rgba(252, 250, 253, .68); backdrop-filter: blur(1px);
+    }
+    .wrap.ajax-carregando::after {
+        content: ""; position: fixed; top: 50%; left: 50%; z-index: 9999;
+        width: 42px; height: 42px; margin: -21px 0 0 -21px;
+        border: 4px solid var(--line); border-top-color: var(--signal);
+        border-radius: 50%; box-shadow: 0 5px 18px rgba(60, 19, 84, .14);
+        animation: girar-carregamento .72s linear infinite;
+    }
+    .wrap.ajax-carregando form { opacity: .68; pointer-events: none; }
+    @keyframes girar-carregamento { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) {
+        .wrap.ajax-carregando::after { animation-duration: 1.5s; }
+    }
+    .ajax-erro {
+        margin: 0 0 18px; padding: 11px 15px; border: 1px solid var(--danger);
+        border-radius: 10px; background: var(--critical-bg); color: var(--critical-ink);
+        font-size: 13.5px;
+    }
     a.alerta, div.alerta {
         display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
         background: var(--alta-bg); color: var(--alta-ink); border: 1px solid var(--danger-line);
@@ -1224,10 +1260,10 @@ __VARIAVEIS_DE_COR__
     details.done > summary::before { content: "\\25B8 "; }
     details.done[open] > summary::before { content: "\\25BE "; }
     .done-item { border-bottom: 1px solid var(--line); padding-bottom: 4px; }
-    .done-row { display: flex; align-items: center; gap: 12px; padding: 10px 4px; font-size: 13.5px; }
+    .done-row { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding: 10px 4px; font-size: 13.5px; }
     .done-row .did { color: var(--muted); font-size: 12px; min-width: 88px; }
     .done-row .who { color: var(--muted); }
-    .done-row .txt { flex: 1; }
+    .done-row .txt { flex: 1 1 220px; }
     .done-row s { color: var(--muted); text-decoration-color: var(--line); }
     .tag.nota { background: var(--rating-bg); color: var(--rating-ink); }
 
@@ -1286,6 +1322,8 @@ from views.alertas.pagina import configurar as configurar_alertas
 from views.alertas.pagina import render_alertas
 from views.avaliar.pagina import configurar as configurar_avaliar
 from views.avaliar.pagina import render_avaliacao
+from views.concluidos.pagina import configurar as configurar_concluidos
+from views.concluidos.pagina import render_concluidos_todos
 from views.comum.componentes import configurar as configurar_componentes
 from views.comum.componentes import render_abas
 from views.comum.componentes import render_concluidos, render_edicao, render_notas
@@ -1311,6 +1349,7 @@ _contexto_views.update({
 configurar_alertas(_contexto_views)
 configurar_abrir(_contexto_views)
 configurar_avaliar(_contexto_views)
+configurar_concluidos(_contexto_views)
 configurar_painel(_contexto_views)
 configurar_filas(_contexto_views)
 configurar_api({
@@ -1424,6 +1463,11 @@ class Handler(BaseHTTPRequestHandler):
             dias = int(bruto) if bruto.isdigit() and int(bruto) in validos else 30
             self._send_html(render_painel(dias))
             return
+        if url.path == PATH_CONCLUIDOS:
+            self._send_html(render_concluidos_todos(
+                parse_qs(url.query, keep_blank_values=True)
+            ))
+            return
         rotas = {
             FILAS[FILA_SUPORTE]["path"]: render_suporte,
             FILAS[FILA_DEMANDAS]["path"]: render_demandas,
@@ -1478,7 +1522,14 @@ class Handler(BaseHTTPRequestHandler):
 
         # ação disparada da tela de alertas volta pra lá; senão, pra própria fila
         voltar = (form.get("voltar", [""])[0] or "").strip()
-        if voltar == PATH_ALERTAS:
+        if voltar == PATH_CONCLUIDOS:
+            filtros_volta = ler_filtros(form)
+            fila_historico = (form.get("historico_fila", [""])[0] or "").strip()
+            parametros = {k: v for k, v in filtros_volta.items() if k != "status"}
+            if fila_historico in FILAS:
+                parametros["fila"] = fila_historico
+            destino = PATH_CONCLUIDOS + query_string(parametros)
+        elif voltar == PATH_ALERTAS:
             destino = PATH_ALERTAS
         else:
             fila = (form.get("fila", [""])[0] or "").strip()
