@@ -103,8 +103,7 @@ def render_avaliacao(token: str, salvo: bool = False) -> tuple:
         aviso = ""
 
     corpo = f"""
-    <p class="sub">Sua avaliação é opcional e leva dez segundos —
-       ela ajuda a melhorar o atendimento.</p>
+    <p class="sub">Sua avaliação leva dez segundos e ajuda a melhorar o atendimento.</p>
     {aviso}
     <div class="card">
         {dados}

@@ -244,13 +244,23 @@ def render_share(s: sqlite3.Row) -> str:
                 </details>"""
 
 
-def render_concluidos(rows, ocultos: str, notas: dict = None) -> str:
+def render_concluidos(
+    rows,
+    ocultos: str,
+    notas: dict = None,
+    mostrar_fila: bool = False,
+) -> str:
     notas = notas or {}
     out = ""
     for s in rows:
         did = quando(s["concluido_em"]) if s["concluido_em"] else "—"
         cat = f'<span class="tag cat">{e(s["categoria"])}</span>' if s["categoria"] else ""
         nota_tag = f'<span class="tag nota">★ {s["nota"]}/5</span>' if s["nota"] else ""
+        fila_tag = (
+            f'<span class="tag plain">{e(FILAS[s["fila"]]["rotulo"])}</span>'
+            if mostrar_fila else ""
+        )
+        responsavel = e(s["dev"]) if s["dev"] else "Não atribuído"
         # o histórico não some ao concluir: fica acessível aqui
         minhas = notas.get(s["id"], [])
         hist = f'<div class="tools">{render_notas(s, minhas, ocultos)}</div>' if minhas else ""
@@ -259,9 +269,11 @@ def render_concluidos(rows, ocultos: str, notas: dict = None) -> str:
                 <div class="done-row">
                     <span class="did mono">{did}</span>
                     <span class="txt"><s>{e(s['assunto'])}</s></span>
+                    {fila_tag}
                     {cat}
                     {nota_tag}
-                    <span class="who">{e(s['solicitante'])}</span>
+                    <span class="who">Solicitante: {e(s['solicitante'])}</span>
+                    <span class="who">Responsável: {responsavel}</span>
                     <form class="inline" method="post">
                         <input type="hidden" name="action" value="reabrir">
                         <input type="hidden" name="id" value="{s['id']}">
@@ -287,6 +299,10 @@ def render_abas(atual: str, por_fila: dict, n_alertas: int) -> str:
         f"Alertas{pill}</a>"
     )
     abas += (
+        f'<a class="{"on" if atual == PATH_CONCLUIDOS else ""}" '
+        f'href="{PATH_CONCLUIDOS}">Concluídos</a>'
+    )
+    abas += (
         f'<a class="{"on" if atual == PATH_PAINEL else ""}" href="{PATH_PAINEL}">Painel</a>'
     )
     abas += (
@@ -295,13 +311,166 @@ def render_abas(atual: str, por_fila: dict, n_alertas: int) -> str:
     return abas
 
 
-# Único JS da aplicação: completa os links de avaliação e copia pra área de
-# transferência. `execCommand` porque em http na rede local (sem TLS) o
-# navegador bloqueia `navigator.clipboard`.
-SCRIPT = """
-for (const i of document.querySelectorAll(".share-url")) {
-    i.value = location.origin + i.dataset.p;
+# Melhoria progressiva da área interna: formulários e navegação usam fetch,
+# mas continuam funcionando pelo fluxo HTML + PRG quando o JavaScript falha.
+SCRIPT = r"""
+const preposicoesMinusculas = new Set(["a", "as", "da", "das", "de", "do", "dos", "e", "em"]);
+
+function prepararPagina(raiz = document) {
+    for (const campo of raiz.querySelectorAll(".share-url")) {
+        campo.value = location.origin + campo.dataset.p;
+    }
+    for (const campo of raiz.querySelectorAll("[data-iniciais-maiusculas]:not([data-formatacao-ativa])")) {
+        campo.dataset.formatacaoAtiva = "1";
+        campo.addEventListener("blur", () => {
+            const palavras = campo.value.trim().split(/\s+/).filter(Boolean);
+            campo.value = palavras.map((palavra, indice) => {
+                const minuscula = palavra.toLocaleLowerCase("pt-BR");
+                if (indice > 0 && preposicoesMinusculas.has(minuscula)) {
+                    return minuscula;
+                }
+                return minuscula.charAt(0).toLocaleUpperCase("pt-BR") + minuscula.slice(1);
+            }).join(" ");
+        });
+    }
 }
+
+function ativarScripts(raiz) {
+    for (const script of raiz.querySelectorAll("script")) {
+        const novoScript = document.createElement("script");
+        for (const atributo of script.attributes) {
+            novoScript.setAttribute(atributo.name, atributo.value);
+        }
+        novoScript.textContent = script.textContent;
+        script.replaceWith(novoScript);
+    }
+}
+
+function mostrarErroAssincrono(mensagem) {
+    const pagina = document.querySelector(".wrap:not(.pub)");
+    if (!pagina) return;
+    pagina.querySelector(".ajax-erro")?.remove();
+    const aviso = document.createElement("div");
+    aviso.className = "ajax-erro";
+    aviso.setAttribute("role", "alert");
+    aviso.textContent = mensagem;
+    const abas = pagina.querySelector("nav.filas");
+    (abas || pagina.firstElementChild).insertAdjacentElement("afterend", aviso);
+}
+
+async function atualizarPagina(resposta, urlHistorico, modoHistorico, manterRolagem) {
+    if (!resposta.ok) {
+        throw new Error(`O servidor respondeu com o status ${resposta.status}.`);
+    }
+    const html = await resposta.text();
+    const documento = new DOMParser().parseFromString(html, "text/html");
+    const novaPagina = documento.querySelector(".wrap:not(.pub)");
+    const paginaAtual = document.querySelector(".wrap:not(.pub)");
+    if (!novaPagina || !paginaAtual) {
+        throw new Error("A resposta recebida não contém a tela esperada.");
+    }
+
+    const posicao = window.scrollY;
+    paginaAtual.replaceWith(novaPagina);
+    document.title = documento.title || document.title;
+    prepararPagina(novaPagina);
+    ativarScripts(novaPagina);
+    history[modoHistorico](null, "", urlHistorico);
+    window.scrollTo(0, manterRolagem ? posicao : 0);
+}
+
+function dadosDoFormulario(formulario, botao) {
+    const dados = new FormData(formulario);
+    if (botao?.name) {
+        dados.append(botao.name, botao.value);
+    }
+    return new URLSearchParams(dados);
+}
+
+document.addEventListener("submit", async (evento) => {
+    const formulario = evento.target;
+    if (evento.defaultPrevented || !(formulario instanceof HTMLFormElement)) return;
+    if (!formulario.closest(".wrap:not(.pub)")) return;
+
+    const metodo = (formulario.method || "get").toLowerCase();
+    if (!['get', 'post'].includes(metodo)) return;
+    evento.preventDefault();
+
+    const botao = evento.submitter;
+    const textoBotao = botao?.textContent;
+    const pagina = formulario.closest(".wrap");
+    pagina.classList.add("ajax-carregando");
+    pagina.setAttribute("aria-busy", "true");
+    if (botao) {
+        botao.disabled = true;
+        botao.textContent = metodo === "post" ? "Salvando…" : "Carregando…";
+    }
+
+    try {
+        const url = new URL(formulario.getAttribute("action") || location.href, location.href);
+        const dados = dadosDoFormulario(formulario, botao);
+        let resposta;
+        if (metodo === "get") {
+            url.search = dados.toString();
+            resposta = await fetch(url, { credentials: "same-origin" });
+        } else {
+            resposta = await fetch(url, {
+                method: "POST",
+                body: dados,
+                credentials: "same-origin",
+                headers: { "X-Requested-With": "fetch" },
+            });
+        }
+        await atualizarPagina(
+            resposta,
+            resposta.url || url.href,
+            metodo === "get" ? "pushState" : "replaceState",
+            metodo === "post",
+        );
+    } catch (erro) {
+        pagina.classList.remove("ajax-carregando");
+        pagina.removeAttribute("aria-busy");
+        if (botao) {
+            botao.disabled = false;
+            botao.textContent = textoBotao;
+        }
+        mostrarErroAssincrono(`Não foi possível atualizar a tela. ${erro.message}`);
+    }
+});
+
+document.addEventListener("click", async (evento) => {
+    const link = evento.target.closest("nav.filas a, a.alerta, .found a");
+    if (!link || !link.closest(".wrap:not(.pub)")) return;
+    if (evento.button !== 0 || evento.ctrlKey || evento.metaKey || evento.shiftKey || evento.altKey) return;
+    if (link.target || link.hasAttribute("download")) return;
+    const url = new URL(link.href, location.href);
+    if (url.origin !== location.origin) return;
+    evento.preventDefault();
+
+    const pagina = document.querySelector(".wrap:not(.pub)");
+    pagina.classList.add("ajax-carregando");
+    pagina.setAttribute("aria-busy", "true");
+    try {
+        const resposta = await fetch(url, { credentials: "same-origin" });
+        await atualizarPagina(resposta, resposta.url || url.href, "pushState", false);
+    } catch (erro) {
+        pagina.classList.remove("ajax-carregando");
+        pagina.removeAttribute("aria-busy");
+        mostrarErroAssincrono(`Não foi possível abrir a tela. ${erro.message}`);
+    }
+});
+
+window.addEventListener("popstate", async () => {
+    try {
+        const resposta = await fetch(location.href, { credentials: "same-origin" });
+        await atualizarPagina(resposta, location.href, "replaceState", false);
+    } catch (erro) {
+        location.reload();
+    }
+});
+
+prepararPagina();
+
 function copiar(botao) {
     const campo = botao.parentNode.querySelector("input");
     campo.select();

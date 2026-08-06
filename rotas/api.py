@@ -13,6 +13,7 @@ PATH_DOCUMENTACAO_API = "/api"
 PATH_DOCUMENTACAO_API_ALTERNATIVO = "/api/documentacao"
 PATH_OPENAPI = "/api/openapi.json"
 PATH_CHAMADOS = "/api/chamados"
+PATH_AVALIACOES = "/api/avaliacoes"
 
 _dependencias = {}
 
@@ -81,8 +82,9 @@ def _ler_json(handler) -> tuple[dict | None, str]:
     return payload, ""
 
 
-def _serializar_chamado(chamado: sqlite3.Row) -> dict:
+def _serializar_chamado(chamado: sqlite3.Row, anotacoes=()) -> dict:
     quando = _dependencias["quando"]
+    avaliacao_pendente = chamado["status"] == "concluido" and chamado["nota"] is None
     return {
         "id": chamado["id"],
         "assunto": chamado["assunto"],
@@ -100,30 +102,77 @@ def _serializar_chamado(chamado: sqlite3.Row) -> dict:
         ),
         "usuario": {
             "id": chamado["origem_usuario_id"],
-            "nome": chamado["origem_usuario_nome"],
+            "nome": chamado["origem_usuario_nome"] or chamado["solicitante"],
             "email": chamado["origem_usuario_email"],
         },
+        "avaliacao": {
+            "pendente": avaliacao_pendente,
+            "nota": chamado["nota"],
+            "observacao": chamado["nota_obs"],
+            "avaliado_em": chamado["nota_em"],
+            "avaliado_em_formatado": (
+                quando(chamado["nota_em"]) if chamado["nota_em"] else None
+            ),
+        },
+        "andamento": [
+            {
+                "texto": anotacao["texto"],
+                "criado_em": anotacao["criado_em"],
+                "criado_em_formatado": quando(anotacao["criado_em"]),
+            }
+            for anotacao in anotacoes
+        ],
     }
 
 
-def _listar_chamados(usuario_id: int | None) -> list[dict]:
+def _filtro_usuario(usuario_id: int, usuario_nome: str) -> tuple[str, list]:
+    condicoes = ["(origem_sistema = ? AND origem_usuario_id = ?)"]
+    argumentos = ["locarmais", usuario_id]
+    usuario_nome = " ".join(usuario_nome.split())
+    if usuario_nome:
+        condicoes.append(
+            "(origem_usuario_id IS NULL AND norm(solicitante) = norm(?))"
+        )
+        argumentos.append(usuario_nome)
+    return "(" + " OR ".join(condicoes) + ")", argumentos
+
+
+def _listar_chamados(usuario_id: int | None, usuario_nome: str = "") -> list[dict]:
     conn = _dependencias["get_db"]()
     try:
-        condicoes = ["origem_sistema = ?"]
-        argumentos = ["locarmais"]
+        where = ""
+        argumentos = []
         if usuario_id is not None:
-            condicoes.append("origem_usuario_id = ?")
-            argumentos.append(usuario_id)
+            filtro, argumentos = _filtro_usuario(usuario_id, usuario_nome)
+            where = " WHERE " + filtro
 
         chamados = conn.execute(
-            "SELECT * FROM solicitacoes WHERE " + " AND ".join(condicoes)
+            "SELECT * FROM solicitacoes" + where
             + " ORDER BY criado_em DESC, id DESC LIMIT 500",
             argumentos,
         ).fetchall()
+        anotacoes_por_chamado = {}
+        if chamados:
+            marcadores = ",".join("?" for _ in chamados)
+            anotacoes = conn.execute(
+                f"SELECT * FROM anotacoes WHERE publica = 1 "
+                f"AND solicitacao_id IN ({marcadores}) "
+                "ORDER BY criado_em ASC, id ASC",
+                [chamado["id"] for chamado in chamados],
+            ).fetchall()
+            for anotacao in anotacoes:
+                anotacoes_por_chamado.setdefault(
+                    anotacao["solicitacao_id"], []
+                ).append(anotacao)
     finally:
         conn.close()
 
-    return [_serializar_chamado(chamado) for chamado in chamados]
+    return [
+        _serializar_chamado(
+            chamado, anotacoes_por_chamado.get(chamado["id"], [])
+        )
+        for chamado in chamados
+    ]
 
 
 def _criar_chamado(payload: dict) -> tuple[dict, dict]:
@@ -155,9 +204,23 @@ def _criar_chamado(payload: dict) -> tuple[dict, dict]:
     if erros:
         return {}, erros
 
-    token = _dependencias["novo_token"]()
     conn = _dependencias["get_db"]()
     try:
+        filtro, argumentos = _filtro_usuario(usuario_id, nome)
+        avaliacao_pendente = conn.execute(
+            "SELECT id FROM solicitacoes WHERE " + filtro
+            + " AND status = ? AND nota IS NULL "
+            "ORDER BY concluido_em DESC, id DESC LIMIT 1",
+            argumentos + ["concluido"],
+        ).fetchone()
+        if avaliacao_pendente is not None:
+            return {}, {
+                "avaliacao": (
+                    "Avalie seu último chamado concluído antes de abrir outro."
+                )
+            }
+
+        token = _dependencias["novo_token"]()
         chamado_id = conn.execute(
             "INSERT INTO solicitacoes "
             "(solicitante, assunto, descricao, prioridade, fila, token, "
@@ -177,6 +240,63 @@ def _criar_chamado(payload: dict) -> tuple[dict, dict]:
         conn.close()
 
     return _serializar_chamado(chamado), {}
+
+
+def _avaliar_chamado(payload: dict) -> tuple[dict, dict]:
+    usuario = payload.get("usuario")
+    if not isinstance(usuario, dict):
+        return {}, {"usuario": "Os dados do usuário são obrigatórios."}
+
+    usuario_id = usuario.get("id")
+    usuario_nome = str(usuario.get("nome") or "").strip()
+    chamado_id = payload.get("chamado_id")
+    nota = payload.get("nota")
+    observacao = str(payload.get("observacao") or "").strip()
+
+    erros = {}
+    if isinstance(usuario_id, bool) or not isinstance(usuario_id, int) or usuario_id <= 0:
+        erros["usuario.id"] = "O identificador do usuário é inválido."
+    if not usuario_nome or len(usuario_nome) > 255:
+        erros["usuario.nome"] = "O nome do usuário é inválido."
+    if isinstance(chamado_id, bool) or not isinstance(chamado_id, int) or chamado_id <= 0:
+        erros["chamado_id"] = "O identificador do chamado é inválido."
+    if isinstance(nota, bool) or not isinstance(nota, int) or nota not in range(1, 6):
+        erros["nota"] = "A nota deve ser um número entre 1 e 5."
+    if len(observacao) > 1000:
+        erros["observacao"] = "A observação deve ter no máximo 1000 caracteres."
+    if erros:
+        return {}, erros
+
+    conn = _dependencias["get_db"]()
+    try:
+        filtro, argumentos = _filtro_usuario(usuario_id, usuario_nome)
+        chamado = conn.execute(
+            "SELECT * FROM solicitacoes WHERE id = ? AND " + filtro,
+            [chamado_id] + argumentos,
+        ).fetchone()
+        if chamado is None:
+            return {}, {"chamado_id": "Chamado não encontrado para este usuário."}
+        if chamado["status"] != "concluido":
+            return {}, {"chamado_id": "O chamado ainda não foi concluído."}
+
+        conn.execute(
+            "UPDATE solicitacoes SET nota = ?, nota_obs = ?, "
+            "nota_em = datetime('now') WHERE id = ?",
+            (nota, observacao, chamado_id),
+        )
+        chamado = conn.execute(
+            "SELECT * FROM solicitacoes WHERE id = ?", (chamado_id,)
+        ).fetchone()
+        anotacoes = conn.execute(
+            "SELECT * FROM anotacoes WHERE solicitacao_id = ? AND publica = 1 "
+            "ORDER BY criado_em ASC, id ASC",
+            (chamado_id,),
+        ).fetchall()
+        conn.commit()
+    finally:
+        conn.close()
+
+    return _serializar_chamado(chamado, anotacoes), {}
 
 
 def _especificacao_openapi() -> dict:
@@ -205,6 +325,27 @@ def _especificacao_openapi() -> dict:
             "concluido_em": {"type": ["string", "null"]},
             "concluido_em_formatado": {"type": ["string", "null"]},
             "usuario": esquema_usuario,
+            "avaliacao": {
+                "type": "object",
+                "properties": {
+                    "pendente": {"type": "boolean"},
+                    "nota": {"type": ["integer", "null"], "minimum": 1, "maximum": 5},
+                    "observacao": {"type": "string"},
+                    "avaliado_em": {"type": ["string", "null"]},
+                    "avaliado_em_formatado": {"type": ["string", "null"]},
+                },
+            },
+            "andamento": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "texto": {"type": "string"},
+                        "criado_em": {"type": "string"},
+                        "criado_em_formatado": {"type": "string"},
+                    },
+                },
+            },
         },
     }
     resposta_erro = {
@@ -223,7 +364,7 @@ def _especificacao_openapi() -> dict:
         "openapi": "3.1.0",
         "info": {
             "title": "SolicitaMais API",
-            "version": "1.0.0",
+            "version": "1.3.0",
             "description": "API privada para criação e acompanhamento de chamados do LocarMais.",
         },
         "servers": [{"url": "/", "description": "Servidor atual"}],
@@ -231,12 +372,18 @@ def _especificacao_openapi() -> dict:
             "/api/chamados": {
                 "get": {
                     "summary": "Listar chamados",
-                    "description": "Com usuario_id, lista somente o usuário. Sem o parâmetro, lista todos os chamados do LocarMais.",
+                    "description": "Com usuario_id, lista os chamados vinculados ao ID e os manuais sem origem cujo solicitante corresponda a usuario_nome. Sem os parâmetros, lista todos os chamados.",
                     "security": [{"bearerAuth": []}],
-                    "parameters": [{
-                        "name": "usuario_id", "in": "query", "required": False,
-                        "schema": {"type": "integer", "minimum": 1},
-                    }],
+                    "parameters": [
+                        {
+                            "name": "usuario_id", "in": "query", "required": False,
+                            "schema": {"type": "integer", "minimum": 1},
+                        },
+                        {
+                            "name": "usuario_nome", "in": "query", "required": False,
+                            "schema": {"type": "string", "maxLength": 255},
+                        },
+                    ],
                     "responses": {
                         "200": {
                             "description": "Lista de chamados",
@@ -280,7 +427,39 @@ def _especificacao_openapi() -> dict:
                         "503": resposta_erro,
                     },
                 },
-            }
+            },
+            "/api/avaliacoes": {
+                "post": {
+                    "summary": "Avaliar chamado",
+                    "description": "Registra a nota de um chamado concluído pertencente ao usuário autenticado no LocarMais.",
+                    "security": [{"bearerAuth": []}],
+                    "requestBody": {
+                        "required": True,
+                        "content": {"application/json": {"schema": {
+                            "type": "object",
+                            "required": ["usuario", "chamado_id", "nota"],
+                            "properties": {
+                                "usuario": esquema_usuario,
+                                "chamado_id": {"type": "integer", "minimum": 1},
+                                "nota": {"type": "integer", "minimum": 1, "maximum": 5},
+                                "observacao": {"type": "string", "maxLength": 1000},
+                            },
+                        }}},
+                    },
+                    "responses": {
+                        "200": {
+                            "description": "Avaliação registrada",
+                            "content": {"application/json": {"schema": {
+                                "type": "object", "properties": {"dados": esquema_chamado},
+                            }}},
+                        },
+                        "400": resposta_erro,
+                        "401": resposta_erro,
+                        "422": resposta_erro,
+                        "503": resposta_erro,
+                    },
+                }
+            },
         },
         "components": {
             "securitySchemes": {
@@ -304,17 +483,21 @@ def atender_get(handler, url) -> bool:
 
     query = parse_qs(url.query)
     bruto = (query.get("usuario_id", [""])[0] or "").strip()
+    usuario_nome = (query.get("usuario_nome", [""])[0] or "").strip()
     if bruto and (not bruto.isdigit() or int(bruto) <= 0):
         _enviar_json(handler, {"mensagem": "usuario_id inválido."}, 422)
         return True
+    if len(usuario_nome) > 255:
+        _enviar_json(handler, {"mensagem": "usuario_nome inválido."}, 422)
+        return True
 
     usuario_id = int(bruto) if bruto else None
-    _enviar_json(handler, {"dados": _listar_chamados(usuario_id)})
+    _enviar_json(handler, {"dados": _listar_chamados(usuario_id, usuario_nome)})
     return True
 
 
 def atender_post(handler, url) -> bool:
-    if url.path != PATH_CHAMADOS:
+    if url.path not in (PATH_CHAMADOS, PATH_AVALIACOES):
         return False
     if not _autorizada(handler):
         return True
@@ -325,11 +508,30 @@ def atender_post(handler, url) -> bool:
         _enviar_json(handler, {"mensagem": erro}, status)
         return True
 
+    if url.path == PATH_AVALIACOES:
+        chamado, erros = _avaliar_chamado(payload)
+        if erros:
+            _enviar_json(
+                handler,
+                {"mensagem": "Não foi possível registrar a avaliação.", "erros": erros},
+                422,
+            )
+            return True
+
+        _enviar_json(
+            handler,
+            {"dados": chamado, "mensagem": "Avaliação registrada. Obrigado!"},
+        )
+        return True
+
     chamado, erros = _criar_chamado(payload)
     if erros:
         _enviar_json(
             handler,
-            {"mensagem": "Revise os dados enviados.", "erros": erros},
+            {
+                "mensagem": erros.get("avaliacao", "Revise os dados enviados."),
+                "erros": erros,
+            },
             422,
         )
         return True

@@ -19,6 +19,17 @@ def render_documentacao_api(token_configurado: bool) -> str:
             "nome": "Maria da Silva",
             "email": "maria@locarmais.com.br",
         },
+        "avaliacao": {
+            "pendente": False,
+            "nota": None,
+        },
+        "andamento": [
+            {
+                "texto": "A correção foi aplicada e está pronta para validação.",
+                "criado_em": "2026-08-05 20:10:00",
+                "criado_em_formatado": "05/08 17:10",
+            }
+        ],
         "categoria": "suporte",
         "assunto": "Não consigo emitir o boleto",
         "descricao": "Ao confirmar a emissão, a tela retorna uma mensagem de erro.",
@@ -191,8 +202,9 @@ SOLICITAMAIS_API_TOKEN=mesmo-token-do-python</pre>
             <h2>Controle de acesso</h2>
             <p class="intro">A autorização por usuário acontece no backend do LocarMais antes da chamada à API.</p>
             <div class="resumo-grid">
-                <div class="mini"><b>Usuário comum</b><span>O Laravel envia seu próprio ID em <code class="inline">usuario_id</code> e recebe somente os chamados daquele usuário.</span></div>
-                <div class="mini"><b>Super Admin</b><span>O Laravel omite <code class="inline">usuario_id</code> e recebe todos os chamados originados no LocarMais.</span></div>
+                <div class="mini"><b>Usuário comum</b><span>O Laravel envia seu ID e nome. A API inclui os chamados vinculados ao ID e os manuais sem origem abertos com o mesmo nome.</span></div>
+                <div class="mini"><b>Super Admin</b><span>O Laravel omite os filtros e recebe todos os chamados, inclusive os criados diretamente no SolicitaMais.</span></div>
+                <div class="mini"><b>Avaliação obrigatória</b><span>Um chamado concluído sem nota bloqueia uma nova abertura daquele usuário até o envio da avaliação.</span></div>
             </div>
         </section>
 
@@ -205,10 +217,13 @@ SOLICITAMAIS_API_TOKEN=mesmo-token-do-python</pre>
                     <h3>Parâmetros de consulta</h3>
                     <table>
                         <thead><tr><th>Nome</th><th>Tipo</th><th>Obrigatório</th><th>Descrição</th></tr></thead>
-                        <tbody><tr><td><code>usuario_id</code></td><td>integer</td><td>Não</td><td>Filtra pelo ID do usuário. Quando omitido, retorna todos os chamados originados no LocarMais.</td></tr></tbody>
+                        <tbody>
+                            <tr><td><code>usuario_id</code></td><td>integer</td><td>Não</td><td>Filtra pelo ID estável do usuário autenticado.</td></tr>
+                            <tr><td><code>usuario_nome</code></td><td>string</td><td>Não</td><td>Inclui chamados sem ID de origem quando o nome do solicitante corresponder. Quando os filtros são omitidos, retorna todos os chamados.</td></tr>
+                        </tbody>
                     </table>
                     <h3>Exemplo</h3>
-                    <pre>curl "http://localhost:8001/api/chamados?usuario_id=123" \
+                    <pre>curl "http://localhost:8001/api/chamados?usuario_id=123&amp;usuario_nome=Sistema" \
   -H "Authorization: Bearer $SOLICITAMAIS_API_TOKEN" \
   -H "Accept: application/json"</pre>
                     <h3>Resposta 200</h3>
@@ -237,6 +252,17 @@ SOLICITAMAIS_API_TOKEN=mesmo-token-do-python</pre>
                     <pre>{_json_exemplo({"dados": chamado})}</pre>
                     <h3>Resposta 422</h3>
                     <pre>{_json_exemplo({"mensagem": "Revise os dados enviados.", "erros": {"assunto": "O assunto deve ter entre 1 e 160 caracteres."}})}</pre>
+                </div>
+            </details>
+
+            <details class="endpoint" id="avaliar" open>
+                <summary><span class="metodo post">POST</span><span class="caminho">/api/avaliacoes</span><span class="descricao-rota">Avalia um chamado concluído</span></summary>
+                <div class="endpoint-corpo">
+                    <p>O backend da LocarMais envia a identidade autenticada. A avaliação só é aceita quando o chamado pertence ao usuário e já está concluído.</p>
+                    <h3>JSON enviado</h3>
+                    <pre>{_json_exemplo({"usuario": requisicao_criar["usuario"], "chamado_id": 42, "nota": 5, "observacao": "Atendimento resolvido."})}</pre>
+                    <h3>Resposta 200</h3>
+                    <pre>{_json_exemplo({"dados": chamado, "mensagem": "Avaliação registrada. Obrigado!"})}</pre>
                 </div>
             </details>
         </section>

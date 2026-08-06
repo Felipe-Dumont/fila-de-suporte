@@ -166,7 +166,7 @@ def renderizar(fila: str, f: dict) -> str:
             f'<option value="{e(c)}"{" selected" if f["cat"] == c else ""}>{e(c)}</option>'
             for c in categorias
         )
-        filtro_cat = f'<select name="cat" onchange="this.form.submit()">{opts}</select>'
+        filtro_cat = f'<select name="cat" onchange="this.form.requestSubmit()">{opts}</select>'
 
     # select de responsável só aparece depois que existe algum cadastrado na fila
     filtro_dev = ""
@@ -178,7 +178,7 @@ def renderizar(fila: str, f: dict) -> str:
             f'<option value="{e(d)}"{" selected" if f["resp"] == d else ""}>{e(d)}</option>'
             for d in devs
         )
-        filtro_dev = f'<select name="resp" onchange="this.form.submit()">{opts}</select>'
+        filtro_dev = f'<select name="resp" onchange="this.form.requestSubmit()">{opts}</select>'
 
     titulo_secao = rotulos[f["status"]] if f["status"] else conf["secao"]
 
@@ -201,13 +201,15 @@ def renderizar(fila: str, f: dict) -> str:
             <input type="hidden" name="action" value="criar">
             {ocultos}
             <label for="solicitante">Solicitante</label>
-            <input id="solicitante" name="solicitante" required maxlength="120" placeholder="Quem está pedindo">
+            <input data-iniciais-maiusculas id="solicitante" name="solicitante"
+                   required maxlength="120" placeholder="Quem está pedindo">
             <label for="assunto">Assunto</label>
             <input id="assunto" name="assunto" required maxlength="160" placeholder="Resumo do problema">
             <label for="descricao">Detalhes</label>
             <textarea id="descricao" name="descricao" maxlength="2000" placeholder="Contexto, passos, o que já foi tentado…"></textarea>
             <label for="categoria">Categoria</label>
-            <input id="categoria" name="categoria" maxlength="60" list="cats"
+            <input data-iniciais-maiusculas id="categoria" name="categoria"
+                   maxlength="60" list="cats"
                    placeholder="Ex.: Contratos, Equipamento">
             <label for="prioridade">Prioridade</label>
             <select id="prioridade" name="prioridade">
@@ -232,9 +234,9 @@ def renderizar(fila: str, f: dict) -> str:
             <form class="filters" method="get" action="{conf['path']}">
                 <input type="search" name="q" value="{e(f['q'])}" maxlength="120"
                        placeholder="Buscar por solicitante, assunto ou detalhes…">
-                <select name="status" onchange="this.form.submit()">{opt_status}</select>
+                <select name="status" onchange="this.form.requestSubmit()">{opt_status}</select>
                 {filtro_cat}
-                <select name="prio" onchange="this.form.submit()">{opt_prio}</select>
+                <select name="prio" onchange="this.form.requestSubmit()">{opt_prio}</select>
                 {filtro_dev}
                 <button class="btn ghost" type="submit">Filtrar</button>
             </form>
