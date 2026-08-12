@@ -85,6 +85,22 @@ def renderizar(fila: str, f: dict) -> str:
             )
         ]
 
+        # solicitantes e assuntos já usados nesta fila, só pro autocomplete
+        solicitantes = [
+            r[0] for r in conn.execute(
+                "SELECT DISTINCT solicitante FROM solicitacoes WHERE fila = ? "
+                "AND solicitante <> '' ORDER BY solicitante COLLATE NOCASE",
+                (fila,),
+            )
+        ]
+        assuntos = [
+            r[0] for r in conn.execute(
+                "SELECT DISTINCT assunto FROM solicitacoes WHERE fila = ? "
+                "AND assunto <> '' ORDER BY assunto COLLATE NOCASE",
+                (fila,),
+            )
+        ]
+
         notas = carregar_notas(conn, list(abertos) + list(concluidos))
         al = buscar_alertas(conn)
     finally:
@@ -96,6 +112,12 @@ def renderizar(fila: str, f: dict) -> str:
     datalist = f'<datalist id="cats">{opcoes_datalist}</datalist>'
     datalist += '<datalist id="resps">' + "".join(
         f'<option value="{e(d)}">' for d in devs
+    ) + "</datalist>"
+    datalist += '<datalist id="sols">' + "".join(
+        f'<option value="{e(sol)}">' for sol in solicitantes
+    ) + "</datalist>"
+    datalist += '<datalist id="assus">' + "".join(
+        f'<option value="{e(a)}">' for a in assuntos
     ) + "</datalist>"
 
     if f["status"] == STATUS_CONCLUIDO:
@@ -202,9 +224,10 @@ def renderizar(fila: str, f: dict) -> str:
             {ocultos}
             <label for="solicitante">Solicitante</label>
             <input data-iniciais-maiusculas id="solicitante" name="solicitante"
-                   required maxlength="120" placeholder="Quem está pedindo">
+                   required maxlength="120" list="sols" placeholder="Quem está pedindo">
             <label for="assunto">Assunto</label>
-            <input id="assunto" name="assunto" required maxlength="160" placeholder="Resumo do problema">
+            <input id="assunto" name="assunto" required maxlength="160" list="assus"
+                   placeholder="Resumo do problema">
             <label for="descricao">Detalhes</label>
             <textarea id="descricao" name="descricao" maxlength="2000" placeholder="Contexto, passos, o que já foi tentado…"></textarea>
             <label for="categoria">Categoria</label>

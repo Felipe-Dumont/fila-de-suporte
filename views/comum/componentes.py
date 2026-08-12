@@ -61,7 +61,8 @@ def render_notas(s: sqlite3.Row, notas: list, ocultos: str) -> str:
             </details>"""
 
 
-def render_edicao(s: sqlite3.Row, ocultos: str, lista_cat: str) -> str:
+def render_edicao(s: sqlite3.Row, ocultos: str, lista_cat: str,
+                  lista_sol: str = "sols", lista_assunto: str = "assus") -> str:
     opts_prio = "".join(
         f'<option value="{p}"{" selected" if s["prioridade"] == p else ""}>'
         f"{p.capitalize()}</option>"
@@ -75,13 +76,14 @@ def render_edicao(s: sqlite3.Row, ocultos: str, lista_cat: str) -> str:
                     <input type="hidden" name="id" value="{s['id']}">
                     {ocultos}
                     <label>Assunto</label>
-                    <input name="assunto" required maxlength="160" value="{e(s['assunto'])}">
+                    <input name="assunto" required maxlength="160" list="{lista_assunto}"
+                           value="{e(s['assunto'])}">
                     <label>Detalhes</label>
                     <textarea name="descricao" maxlength="2000">{e(s['descricao'])}</textarea>
                     <div class="linha2">
                         <div>
                             <label>Solicitante</label>
-                            <input name="solicitante" required maxlength="120"
+                            <input name="solicitante" required maxlength="120" list="{lista_sol}"
                                    value="{e(s['solicitante'])}">
                         </div>
                         <div>
@@ -101,7 +103,8 @@ def render_edicao(s: sqlite3.Row, ocultos: str, lista_cat: str) -> str:
 
 def render_ticket(pos: int, s: sqlite3.Row, ocultos: str, fila: str,
                   notas: list = (), lista_cat: str = "cats",
-                  lista_resp: str = "resps") -> str:
+                  lista_resp: str = "resps", lista_sol: str = "sols",
+                  lista_assunto: str = "assus") -> str:
     is_next = pos == 1
     em_atend = s["status"] == STATUS_ATENDIMENTO
     demanda = fila == FILA_DEMANDAS
@@ -206,7 +209,7 @@ def render_ticket(pos: int, s: sqlite3.Row, ocultos: str, fila: str,
                 </form>
             </div>
             <div class="tools">
-                {render_edicao(s, ocultos, lista_cat)}
+                {render_edicao(s, ocultos, lista_cat, lista_sol, lista_assunto)}
                 {render_notas(s, list(notas), ocultos)}
             </div>
             {assign}
