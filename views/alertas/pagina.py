@@ -50,6 +50,18 @@ def render_alertas() -> str:
                 "ORDER BY dev COLLATE NOCASE"
             )
         ]
+        solicitantes = [
+            r[0] for r in conn.execute(
+                "SELECT DISTINCT solicitante FROM solicitacoes WHERE solicitante <> '' "
+                "ORDER BY solicitante COLLATE NOCASE"
+            )
+        ]
+        assuntos = [
+            r[0] for r in conn.execute(
+                "SELECT DISTINCT assunto FROM solicitacoes WHERE assunto <> '' "
+                "ORDER BY assunto COLLATE NOCASE"
+            )
+        ]
     finally:
         conn.close()
 
@@ -94,6 +106,12 @@ def render_alertas() -> str:
     corpo += f'<datalist id="cats">{opcoes_datalist}</datalist>'
     corpo += '<datalist id="resps">' + "".join(
         f'<option value="{e(d)}">' for d in responsaveis
+    ) + "</datalist>"
+    corpo += '<datalist id="sols">' + "".join(
+        f'<option value="{e(sol)}">' for sol in solicitantes
+    ) + "</datalist>"
+    corpo += '<datalist id="assus">' + "".join(
+        f'<option value="{e(a)}">' for a in assuntos
     ) + "</datalist>"
 
     return shell(
