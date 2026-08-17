@@ -378,6 +378,7 @@ async function atualizarPagina(resposta, urlHistorico, modoHistorico, manterRola
     document.title = documento.title || document.title;
     prepararPagina(novaPagina);
     ativarScripts(novaPagina);
+    garantirSino();
     history[modoHistorico](null, "", urlHistorico);
     window.scrollTo(0, manterRolagem ? posicao : 0);
 }
@@ -471,6 +472,144 @@ window.addEventListener("popstate", async () => {
         location.reload();
     }
 });
+
+// Sino de notificações: só existe na área interna (nunca nas telas públicas
+// de abertura/avaliação, pra não arriscar o navegador pedir a credencial
+// Basic do fetch pra um visitante anônimo).
+const CAMINHO_NOTIFICACOES_NOVAS = "/interno/notificacoes/novas";
+const CAMINHOS_FILA = { suporte: "/", demandas: "/demandas" };
+const ROTULOS_FILA = { suporte: "Suporte", demandas: "Demandas" };
+let notificacoesDesde = null;
+let notificacoesLista = [];      // mais recente primeiro; cada item guarda `lida`
+
+function escaparTexto(texto) {
+    const div = document.createElement("div");
+    div.textContent = texto ?? "";
+    return div.innerHTML;
+}
+
+function garantirSino() {
+    const cabecalho = document.querySelector(".wrap:not(.pub) header.top");
+    if (!cabecalho || cabecalho.querySelector(".sino-wrap")) return;
+    const contentor = document.createElement("div");
+    contentor.className = "sino-wrap";
+    contentor.innerHTML =
+        '<button type="button" class="sino" aria-label="Notificações de novos chamados" '
+        + 'aria-expanded="false" title="Notificações de novos chamados">'
+        + '🔔<span class="badge" hidden></span></button>'
+        + '<div class="sino-painel" hidden></div>';
+    contentor.querySelector(".sino").addEventListener("click", (evento) => {
+        evento.stopPropagation();
+        alternarPainelSino();
+    });
+    cabecalho.appendChild(contentor);
+    atualizarBadgeSino();
+    renderizarPainelSino();
+}
+
+function alternarPainelSino() {
+    const painel = document.querySelector(".wrap:not(.pub) .sino-painel");
+    const botao = document.querySelector(".wrap:not(.pub) .sino");
+    if (!painel || !botao) return;
+    const vaiAbrir = painel.hidden;
+    painel.hidden = !vaiAbrir;
+    botao.setAttribute("aria-expanded", String(vaiAbrir));
+    if (vaiAbrir) {
+        notificacoesLista.forEach((item) => { item.lida = true; });
+        atualizarBadgeSino();
+        renderizarPainelSino();
+    }
+}
+
+document.addEventListener("click", (evento) => {
+    const contentor = document.querySelector(".wrap:not(.pub) .sino-wrap");
+    if (!contentor || contentor.contains(evento.target)) return;
+    fecharPainelSino();
+});
+
+document.addEventListener("keydown", (evento) => {
+    if (evento.key === "Escape") fecharPainelSino();
+});
+
+function fecharPainelSino() {
+    const painel = document.querySelector(".wrap:not(.pub) .sino-painel");
+    if (!painel || painel.hidden) return;
+    painel.hidden = true;
+    document.querySelector(".wrap:not(.pub) .sino")?.setAttribute("aria-expanded", "false");
+}
+
+function atualizarBadgeSino() {
+    const badge = document.querySelector(".wrap:not(.pub) .sino .badge");
+    if (!badge) return;
+    const pendentes = notificacoesLista.filter((item) => !item.lida).length;
+    if (pendentes > 0) {
+        badge.hidden = false;
+        badge.textContent = pendentes > 99 ? "99+" : String(pendentes);
+    } else {
+        badge.hidden = true;
+    }
+}
+
+function renderizarPainelSino() {
+    const painel = document.querySelector(".wrap:not(.pub) .sino-painel");
+    if (!painel) return;
+    if (!notificacoesLista.length) {
+        painel.innerHTML = '<p class="vazio">Nenhum chamado novo por aqui.</p>';
+        return;
+    }
+    painel.innerHTML = notificacoesLista.map((chamado) => {
+        const caminho = CAMINHOS_FILA[chamado.fila] || "/";
+        const rotulo = ROTULOS_FILA[chamado.fila] || "";
+        return '<a class="item" href="' + caminho + '?q=' + encodeURIComponent(chamado.assunto) + '">'
+            + '<div class="assunto">' + escaparTexto(chamado.assunto) + '</div>'
+            + '<div class="meta">' + escaparTexto(chamado.solicitante) + ' · ' + rotulo + '</div>'
+            + '</a>';
+    }).join("");
+}
+
+function mostrarToastNovoChamado(chamado) {
+    let pilha = document.querySelector(".toast-pilha");
+    if (!pilha) {
+        pilha = document.createElement("div");
+        pilha.className = "toast-pilha";
+        document.body.appendChild(pilha);
+    }
+    const toast = document.createElement("div");
+    toast.className = "toast";
+    toast.innerHTML = `<b>Novo chamado</b>${escaparTexto(chamado.assunto)} — ${escaparTexto(chamado.solicitante)}`;
+    pilha.appendChild(toast);
+    setTimeout(() => toast.remove(), 8000);
+}
+
+async function verificarNotificacoes() {
+    try {
+        const url = new URL(CAMINHO_NOTIFICACOES_NOVAS, location.origin);
+        if (notificacoesDesde) url.searchParams.set("desde", notificacoesDesde);
+        const resposta = await fetch(url, { credentials: "same-origin" });
+        if (!resposta.ok) return;
+        const dados = await resposta.json();
+        notificacoesDesde = dados.ultimo;
+        if (dados.novos && dados.novos.length) {
+            const painelEl = document.querySelector(".wrap:not(.pub) .sino-painel");
+            const painelAberto = painelEl ? !painelEl.hidden : false;
+            for (const chamado of dados.novos) {
+                notificacoesLista.unshift({ ...chamado, lida: painelAberto });
+                mostrarToastNovoChamado(chamado);
+            }
+            notificacoesLista = notificacoesLista.slice(0, 20);
+            atualizarBadgeSino();
+            renderizarPainelSino();
+        }
+    } catch (erro) {
+        // silencioso: tenta de novo no próximo ciclo
+    }
+}
+
+if (document.querySelector(".wrap:not(.pub)")) {
+    garantirSino();
+    verificarNotificacoes();
+    setInterval(verificarNotificacoes, 20000);
+}
 
 prepararPagina();
 
