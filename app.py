@@ -10,6 +10,7 @@ O banco local (data.sqlite) é criado automaticamente ao lado deste arquivo.
 """
 
 import html
+import json
 import os
 import secrets
 import sqlite3
@@ -77,6 +78,8 @@ LIMITE_ESPERA_HORAS = 2
 PATH_ALERTAS = "/alertas"
 PATH_PAINEL = "/painel"
 PATH_CONCLUIDOS = "/concluidos"
+# Sino de notificações da área interna: polling autenticado, sem WebSocket.
+PATH_NOTIFICACOES_NOVAS = "/interno/notificacoes/novas"
 
 # Avaliação: página pública, aberta pelo link que o solicitante recebe. Nunca é
 # obrigatória — item concluído sem nota continua normal em toda a aplicação.
@@ -1008,6 +1011,42 @@ def salvar_avaliacao(form: dict) -> str:
     return token
 
 
+def notificacoes_novas(desde: str) -> dict:
+    """Chamados abertos depois de `desde` (formato do `criado_em`), pro sino da área interna.
+
+    Sem `desde`, não lista nada: só estabelece o marco pra não inundar quem
+    acabou de abrir a tela com o histórico inteiro.
+    """
+    linhas = []
+    if desde:
+        conn = get_db()
+        try:
+            linhas = conn.execute(
+                "SELECT id, solicitante, assunto, prioridade, fila, criado_em FROM solicitacoes "
+                "WHERE criado_em > ? ORDER BY criado_em ASC LIMIT 20",
+                (desde,),
+            ).fetchall()
+        finally:
+            conn.close()
+
+    ultimo = linhas[-1]["criado_em"] if linhas else (
+        desde or datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    )
+    return {
+        "novos": [
+            {
+                "id": linha["id"],
+                "solicitante": linha["solicitante"],
+                "assunto": linha["assunto"],
+                "prioridade": linha["prioridade"],
+                "fila": linha["fila"],
+            }
+            for linha in linhas
+        ],
+        "ultimo": ultimo,
+    }
+
+
 def abrir_solicitacao(form: dict) -> tuple:
     """Abertura feita pelo próprio solicitante. Devolve (token, erro).
 
@@ -1130,6 +1169,40 @@ __VARIAVEIS_DE_COR__
     }
     nav.filas a.on .pill { background: var(--signal); color: var(--surface); }
     nav.filas a .pill.bad { background: var(--danger); color: var(--danger-ink); }
+    header.top .sino-wrap { position: relative; margin-left: 10px; }
+    header.top .sino {
+        position: relative; border: none; background: none;
+        font-size: 19px; line-height: 1; cursor: pointer; padding: 5px 6px; border-radius: 8px;
+    }
+    header.top .sino:hover { background: var(--surface-muted); }
+    header.top .sino .badge {
+        position: absolute; top: -3px; right: -3px; background: var(--danger); color: var(--danger-ink);
+        font-size: 10.5px; font-weight: 700; line-height: 1; border-radius: 999px;
+        padding: 2px 5px; min-width: 15px; text-align: center;
+    }
+    .sino-painel {
+        position: absolute; top: calc(100% + 8px); right: 0; z-index: 40;
+        width: 300px; max-height: 360px; overflow-y: auto;
+        background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+        box-shadow: 0 12px 32px rgba(0,0,0,.18); padding: 6px;
+    }
+    .sino-painel .item { display: block; padding: 9px 10px; border-radius: 8px; text-decoration: none; color: var(--ink); }
+    .sino-painel .item:hover { background: var(--surface-muted); }
+    .sino-painel .item + .item { margin-top: 2px; }
+    .sino-painel .item .assunto { font-weight: 600; font-size: 13.5px; }
+    .sino-painel .item .meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
+    .sino-painel .vazio { margin: 0; padding: 18px 10px; text-align: center; color: var(--muted); font-size: 13px; }
+    .toast-pilha {
+        position: fixed; top: 16px; right: 16px; z-index: 10000;
+        display: flex; flex-direction: column; gap: 8px; max-width: 320px;
+    }
+    .toast {
+        background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+        padding: 11px 14px; box-shadow: 0 8px 24px rgba(0,0,0,.16); font-size: 13.5px;
+        color: var(--ink); animation: entrar-toast .18s ease-out;
+    }
+    .toast b { display: block; margin-bottom: 2px; }
+    @keyframes entrar-toast { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
     .wrap.ajax-carregando { cursor: progress; }
     .wrap.ajax-carregando::before {
         content: ""; position: fixed; inset: 0; z-index: 9998;
@@ -1422,6 +1495,15 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _send_json(self, payload: dict, status: int = 200) -> None:
+        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(data)
+
     def _autorizar_area_interna(self) -> bool:
         if configuracao_incompleta():
             self._send_html(
@@ -1472,6 +1554,10 @@ class Handler(BaseHTTPRequestHandler):
             self._send_html(corpo, status)
             return
         if not self._autorizar_area_interna():
+            return
+        if url.path == PATH_NOTIFICACOES_NOVAS:
+            desde = (parse_qs(url.query).get("desde", [""])[0] or "").strip()
+            self._send_json(notificacoes_novas(desde))
             return
         if atender_get_kanban(self, url):
             return
