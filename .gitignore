@@ -23,3 +23,7 @@ backups/
 .idea/
 .DS_Store
 *.swp
+
+# Logs do servidor local
+.server.err.log
+.server.out.log

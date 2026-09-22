@@ -107,7 +107,7 @@ e atualize este README junto.
     (volta para `na_fila` e limpa `concluido_em`). **Concluir exige responsável**:
     sem `dev` preenchido nada é gravado, tanto na ação `concluir` quanto ao mover
     um card para a coluna "Concluídos" do Kanban. Quando o chamado ainda não tem
-    dono, o próprio botão Concluir abre o campo que cadastra quem atendeu.
+    dono, o próprio botão Concluir abre o campo que pede quem atendeu.
 11. As duas filas moram na **mesma tabela**, separadas pela coluna `fila`
     (`suporte` | `demandas`). Os rótulos de cada uma vêm do dicionário `FILAS` —
     para mudar texto de UI de uma fila, edite `FILAS`, não o HTML espalhado.
@@ -123,12 +123,6 @@ e atualize este README junto.
 16. **Canonização de texto livre**: `dev` e `categoria` passam por `canonizar()`, que
     reaproveita a grafia já cadastrada quando o valor só difere em caixa/acento — senão
     "Contratos", "contratos" e "Contrato " virariam três categorias e os filtros rachariam.
-    Nas telas internas, `solicitante`, `categoria` e o responsável pedido na conclusão são
-    campos de **escolha ou cadastro** (`campo_combo()`): um `<select>` com o que já foi
-    usado mais a opção "Cadastrar…", que libera o texto enviado em `<campo>_novo`. O
-    servidor lê os dois com `valor_combo()`, que só formata o valor novo — a opção
-    escolhida volta com a grafia exata do banco. A lista sai das próprias solicitações;
-    não existe tabela de cadastros.
 17. **Não prometa o que não dá para medir.** A estimativa de suporte exige ≥ 5 conclusões
     nos últimos 30 dias; a projeção do painel exige janela ≥ 7 dias e ≥ 3 conclusões.
     Sem isso, o valor sai vazio de propósito.

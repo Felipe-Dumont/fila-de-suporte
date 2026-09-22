@@ -61,44 +61,8 @@ def render_notas(s: sqlite3.Row, notas: list, ocultos: str) -> str:
             </details>"""
 
 
-def campo_combo(nome: str, valores, valor: str = "", obrigatorio: bool = False,
-                vazio: str = "Sem definição", novo: str = "Cadastrar nova opção…",
-                placeholder: str = "", limite: int = 120, campo_id: str = "") -> str:
-    """Escolhe uma opção já usada ou cadastra uma nova, no mesmo campo.
-
-    A lista sai das próprias solicitações: o texto novo é gravado junto do
-    chamado e reaparece como opção na próxima vez, sem tabela à parte. Sem
-    JavaScript os dois controles aparecem juntos e o preenchido é o que vale.
-    """
-    conhecidos = [v for v in valores if v]
-    if valor and valor not in conhecidos:
-        # valor gravado antes de um filtro estreitar a lista continua selecionável
-        conhecidos.append(valor)
-
-    opcoes = [
-        f'<option value=""{" disabled" if obrigatorio else ""}'
-        f'{" selected" if not valor else ""}>{e(vazio)}</option>'
-    ]
-    opcoes += [
-        f'<option value="{e(v)}"{" selected" if v == valor else ""}>{e(v)}</option>'
-        for v in conhecidos
-    ]
-    opcoes.append(f'<option value="{OPCAO_NOVO}">{e(novo)}</option>')
-
-    atributos = f' id="{e(campo_id)}"' if campo_id else ""
-    if obrigatorio:
-        atributos += " required"
-    rotulo_novo = placeholder or novo
-    return f"""
-                <div class="combo" data-combo{' data-obrigatorio="1"' if obrigatorio else ''}>
-                    <select name="{nome}"{atributos}>{"".join(opcoes)}</select>
-                    <input class="combo-novo" data-iniciais-maiusculas
-                           name="{nome}_novo" maxlength="{limite}" autocomplete="off"
-                           placeholder="{e(rotulo_novo)}" aria-label="{e(rotulo_novo)}">
-                </div>"""
-
-
-def render_edicao(s: sqlite3.Row, ocultos: str, categorias=(), solicitantes=()) -> str:
+def render_edicao(s: sqlite3.Row, ocultos: str, lista_cat: str,
+                  lista_sol: str = "sols", lista_assunto: str = "assus") -> str:
     opts_prio = "".join(
         f'<option value="{p}"{" selected" if s["prioridade"] == p else ""}>'
         f"{p.capitalize()}</option>"
@@ -112,24 +76,20 @@ def render_edicao(s: sqlite3.Row, ocultos: str, categorias=(), solicitantes=()) 
                     <input type="hidden" name="id" value="{s['id']}">
                     {ocultos}
                     <label>Assunto</label>
-                    <input name="assunto" required maxlength="160" value="{e(s['assunto'])}">
+                    <input name="assunto" required maxlength="160" list="{lista_assunto}"
+                           value="{e(s['assunto'])}">
                     <label>Detalhes</label>
                     <textarea name="descricao" maxlength="2000">{e(s['descricao'])}</textarea>
                     <div class="linha2">
                         <div>
                             <label>Solicitante</label>
-                            {campo_combo("solicitante", solicitantes, s["solicitante"],
-                                         obrigatorio=True,
-                                         vazio="Selecione o solicitante",
-                                         novo="Cadastrar novo solicitante…",
-                                         placeholder="Nome de quem pediu")}
+                            <input name="solicitante" required maxlength="120" list="{lista_sol}"
+                                   value="{e(s['solicitante'])}">
                         </div>
                         <div>
                             <label>Categoria</label>
-                            {campo_combo("categoria", categorias, s["categoria"],
-                                         vazio="Sem categoria",
-                                         novo="Cadastrar nova categoria…",
-                                         placeholder="Ex.: Contratos", limite=60)}
+                            <input name="categoria" maxlength="60" list="{lista_cat}"
+                                   value="{e(s['categoria'])}" placeholder="Ex.: Contratos">
                         </div>
                         <div>
                             <label>Prioridade</label>
@@ -142,8 +102,9 @@ def render_edicao(s: sqlite3.Row, ocultos: str, categorias=(), solicitantes=()) 
 
 
 def render_ticket(pos: int, s: sqlite3.Row, ocultos: str, fila: str,
-                  notas: list = (), categorias=(), solicitantes=(),
-                  responsaveis=(), lista_resp: str = "resps") -> str:
+                  notas: list = (), lista_cat: str = "cats",
+                  lista_resp: str = "resps", lista_sol: str = "sols",
+                  lista_assunto: str = "assus") -> str:
     is_next = pos == 1
     em_atend = s["status"] == STATUS_ATENDIMENTO
     demanda = fila == FILA_DEMANDAS
@@ -218,7 +179,7 @@ def render_ticket(pos: int, s: sqlite3.Row, ocultos: str, fila: str,
                 <button class="btn ghost" type="submit">{FILAS[fila]['iniciar']}</button>
             </form>"""
 
-    # chamado só fecha com dono: sem responsável, concluir vira o próprio cadastro dele
+    # chamado só fecha com dono: sem responsável, concluir pede quem atendeu
     if s["dev"]:
         concluir_form = f"""
                 <form class="inline" method="post">
@@ -238,10 +199,8 @@ def render_ticket(pos: int, s: sqlite3.Row, ocultos: str, fila: str,
                         <p class="hint">Este chamado ainda não tem
                            {conf['resp'].lower()}. Informe quem atendeu para concluir.</p>
                         <label>{conf['resp']}</label>
-                        {campo_combo("dev", responsaveis, obrigatorio=True,
-                                     vazio=f"Selecione o {conf['resp_filtro']}",
-                                     novo="Cadastrar novo nome…",
-                                     placeholder="Nome de quem atendeu", limite=80)}
+                        <input name="dev" required maxlength="80" list="{lista_resp}"
+                               placeholder="{conf['resp_ph']}">
                         <button class="btn primary" type="submit">Concluir chamado</button>
                     </form>
                 </details>"""
@@ -271,7 +230,7 @@ def render_ticket(pos: int, s: sqlite3.Row, ocultos: str, fila: str,
                 </form>
             </div>
             <div class="tools">
-                {render_edicao(s, ocultos, categorias, solicitantes)}
+                {render_edicao(s, ocultos, lista_cat, lista_sol, lista_assunto)}
                 {render_notas(s, list(notas), ocultos)}
             </div>
             {assign}
@@ -380,10 +339,8 @@ def render_abas(atual: str, por_fila: dict, n_alertas: int) -> str:
 # mas continuam funcionando pelo fluxo HTML + PRG quando o JavaScript falha.
 SCRIPT = r"""
 const preposicoesMinusculas = new Set(["a", "as", "da", "das", "de", "do", "dos", "e", "em"]);
-const OPCAO_NOVA = "__OPCAO_NOVA__";
 
 function prepararPagina(raiz = document) {
-    prepararCombos(raiz);
     for (const campo of raiz.querySelectorAll(".share-url")) {
         campo.value = location.origin + campo.dataset.p;
     }
@@ -399,25 +356,6 @@ function prepararPagina(raiz = document) {
                 return minuscula.charAt(0).toLocaleUpperCase("pt-BR") + minuscula.slice(1);
             }).join(" ");
         });
-    }
-}
-
-function prepararCombos(raiz = document) {
-    for (const combo of raiz.querySelectorAll("[data-combo]:not([data-combo-ativo])")) {
-        combo.dataset.comboAtivo = "1";
-        const selecao = combo.querySelector("select");
-        const novo = combo.querySelector(".combo-novo");
-        if (!selecao || !novo) continue;
-        const obrigatorio = combo.dataset.obrigatorio === "1";
-        const sincronizar = (focar) => {
-            const cadastrando = selecao.value === OPCAO_NOVA;
-            novo.hidden = !cadastrando;
-            novo.required = cadastrando && obrigatorio;
-            if (!cadastrando) novo.value = "";
-            else if (focar) novo.focus();
-        };
-        selecao.addEventListener("change", () => sincronizar(true));
-        sincronizar(false);
     }
 }
 
@@ -461,6 +399,7 @@ async function atualizarPagina(resposta, urlHistorico, modoHistorico, manterRola
     document.title = documento.title || document.title;
     prepararPagina(novaPagina);
     ativarScripts(novaPagina);
+    garantirSino();
     history[modoHistorico](null, "", urlHistorico);
     window.scrollTo(0, manterRolagem ? posicao : 0);
 }
@@ -555,6 +494,144 @@ window.addEventListener("popstate", async () => {
     }
 });
 
+// Sino de notificações: só existe na área interna (nunca nas telas públicas
+// de abertura/avaliação, pra não arriscar o navegador pedir a credencial
+// Basic do fetch pra um visitante anônimo).
+const CAMINHO_NOTIFICACOES_NOVAS = "/interno/notificacoes/novas";
+const CAMINHOS_FILA = { suporte: "/", demandas: "/demandas" };
+const ROTULOS_FILA = { suporte: "Suporte", demandas: "Demandas" };
+let notificacoesDesde = null;
+let notificacoesLista = [];      // mais recente primeiro; cada item guarda `lida`
+
+function escaparTexto(texto) {
+    const div = document.createElement("div");
+    div.textContent = texto ?? "";
+    return div.innerHTML;
+}
+
+function garantirSino() {
+    const cabecalho = document.querySelector(".wrap:not(.pub) header.top");
+    if (!cabecalho || cabecalho.querySelector(".sino-wrap")) return;
+    const contentor = document.createElement("div");
+    contentor.className = "sino-wrap";
+    contentor.innerHTML =
+        '<button type="button" class="sino" aria-label="Notificações de novos chamados" '
+        + 'aria-expanded="false" title="Notificações de novos chamados">'
+        + '🔔<span class="badge" hidden></span></button>'
+        + '<div class="sino-painel" hidden></div>';
+    contentor.querySelector(".sino").addEventListener("click", (evento) => {
+        evento.stopPropagation();
+        alternarPainelSino();
+    });
+    cabecalho.appendChild(contentor);
+    atualizarBadgeSino();
+    renderizarPainelSino();
+}
+
+function alternarPainelSino() {
+    const painel = document.querySelector(".wrap:not(.pub) .sino-painel");
+    const botao = document.querySelector(".wrap:not(.pub) .sino");
+    if (!painel || !botao) return;
+    const vaiAbrir = painel.hidden;
+    painel.hidden = !vaiAbrir;
+    botao.setAttribute("aria-expanded", String(vaiAbrir));
+    if (vaiAbrir) {
+        notificacoesLista.forEach((item) => { item.lida = true; });
+        atualizarBadgeSino();
+        renderizarPainelSino();
+    }
+}
+
+document.addEventListener("click", (evento) => {
+    const contentor = document.querySelector(".wrap:not(.pub) .sino-wrap");
+    if (!contentor || contentor.contains(evento.target)) return;
+    fecharPainelSino();
+});
+
+document.addEventListener("keydown", (evento) => {
+    if (evento.key === "Escape") fecharPainelSino();
+});
+
+function fecharPainelSino() {
+    const painel = document.querySelector(".wrap:not(.pub) .sino-painel");
+    if (!painel || painel.hidden) return;
+    painel.hidden = true;
+    document.querySelector(".wrap:not(.pub) .sino")?.setAttribute("aria-expanded", "false");
+}
+
+function atualizarBadgeSino() {
+    const badge = document.querySelector(".wrap:not(.pub) .sino .badge");
+    if (!badge) return;
+    const pendentes = notificacoesLista.filter((item) => !item.lida).length;
+    if (pendentes > 0) {
+        badge.hidden = false;
+        badge.textContent = pendentes > 99 ? "99+" : String(pendentes);
+    } else {
+        badge.hidden = true;
+    }
+}
+
+function renderizarPainelSino() {
+    const painel = document.querySelector(".wrap:not(.pub) .sino-painel");
+    if (!painel) return;
+    if (!notificacoesLista.length) {
+        painel.innerHTML = '<p class="vazio">Nenhum chamado novo por aqui.</p>';
+        return;
+    }
+    painel.innerHTML = notificacoesLista.map((chamado) => {
+        const caminho = CAMINHOS_FILA[chamado.fila] || "/";
+        const rotulo = ROTULOS_FILA[chamado.fila] || "";
+        return '<a class="item" href="' + caminho + '?q=' + encodeURIComponent(chamado.assunto) + '">'
+            + '<div class="assunto">' + escaparTexto(chamado.assunto) + '</div>'
+            + '<div class="meta">' + escaparTexto(chamado.solicitante) + ' · ' + rotulo + '</div>'
+            + '</a>';
+    }).join("");
+}
+
+function mostrarToastNovoChamado(chamado) {
+    let pilha = document.querySelector(".toast-pilha");
+    if (!pilha) {
+        pilha = document.createElement("div");
+        pilha.className = "toast-pilha";
+        document.body.appendChild(pilha);
+    }
+    const toast = document.createElement("div");
+    toast.className = "toast";
+    toast.innerHTML = `<b>Novo chamado</b>${escaparTexto(chamado.assunto)} — ${escaparTexto(chamado.solicitante)}`;
+    pilha.appendChild(toast);
+    setTimeout(() => toast.remove(), 8000);
+}
+
+async function verificarNotificacoes() {
+    try {
+        const url = new URL(CAMINHO_NOTIFICACOES_NOVAS, location.origin);
+        if (notificacoesDesde) url.searchParams.set("desde", notificacoesDesde);
+        const resposta = await fetch(url, { credentials: "same-origin" });
+        if (!resposta.ok) return;
+        const dados = await resposta.json();
+        notificacoesDesde = dados.ultimo;
+        if (dados.novos && dados.novos.length) {
+            const painelEl = document.querySelector(".wrap:not(.pub) .sino-painel");
+            const painelAberto = painelEl ? !painelEl.hidden : false;
+            for (const chamado of dados.novos) {
+                notificacoesLista.unshift({ ...chamado, lida: painelAberto });
+                mostrarToastNovoChamado(chamado);
+            }
+            notificacoesLista = notificacoesLista.slice(0, 20);
+            atualizarBadgeSino();
+            renderizarPainelSino();
+        }
+    } catch (erro) {
+        // silencioso: tenta de novo no próximo ciclo
+    }
+}
+
+if (document.querySelector(".wrap:not(.pub)")) {
+    garantirSino();
+    verificarNotificacoes();
+    setInterval(verificarNotificacoes, 20000);
+}
+
 prepararPagina();
 
 function copiar(botao) {
@@ -565,11 +642,6 @@ function copiar(botao) {
     catch (err) { botao.textContent = "Copie manualmente"; }
 }
 """
-
-
-def script_pagina() -> str:
-    """SCRIPT com as constantes do servidor injetadas, pra não duplicar valor no JS."""
-    return SCRIPT.replace("__OPCAO_NOVA__", OPCAO_NOVO)
 
 
 def shell(titulo: str, sub: str, contadores: str, abas: str, banner: str, corpo: str) -> str:
@@ -594,7 +666,7 @@ def shell(titulo: str, sub: str, contadores: str, abas: str, banner: str, corpo:
     {banner}
     {corpo}
 </div>
-<script>{script_pagina()}</script>
+<script>{SCRIPT}</script>
 </body>
 </html>"""
 
@@ -623,6 +695,6 @@ def shell_publico(titulo: str, corpo: str, h1: str = "Como foi o atendimento?") 
     </header>
     {corpo}
 </div>
-<script>{script_pagina()}</script>
+<script>{SCRIPT}</script>
 </body>
 </html>"""

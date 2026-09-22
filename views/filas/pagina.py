@@ -85,11 +85,19 @@ def renderizar(fila: str, f: dict) -> str:
             )
         ]
 
-        # solicitante é pessoa, não pertence a uma fila só: a lista junta as duas
+        # solicitantes e assuntos já usados nesta fila, só pro autocomplete
         solicitantes = [
             r[0] for r in conn.execute(
-                "SELECT DISTINCT solicitante FROM solicitacoes WHERE solicitante <> '' "
-                "ORDER BY solicitante COLLATE NOCASE"
+                "SELECT DISTINCT solicitante FROM solicitacoes WHERE fila = ? "
+                "AND solicitante <> '' ORDER BY solicitante COLLATE NOCASE",
+                (fila,),
+            )
+        ]
+        assuntos = [
+            r[0] for r in conn.execute(
+                "SELECT DISTINCT assunto FROM solicitacoes WHERE fila = ? "
+                "AND assunto <> '' ORDER BY assunto COLLATE NOCASE",
+                (fila,),
             )
         ]
 
@@ -100,9 +108,16 @@ def renderizar(fila: str, f: dict) -> str:
 
     ocultos = campos_ocultos(f, fila)
     rotulos = dict(FILTRO_STATUS)
-    # o datalist restante serve ao campo de atribuição rápida no rodapé do card
-    datalist = '<datalist id="resps">' + "".join(
+    opcoes_datalist = "".join(f'<option value="{e(c)}">' for c in categorias)
+    datalist = f'<datalist id="cats">{opcoes_datalist}</datalist>'
+    datalist += '<datalist id="resps">' + "".join(
         f'<option value="{e(d)}">' for d in devs
+    ) + "</datalist>"
+    datalist += '<datalist id="sols">' + "".join(
+        f'<option value="{e(sol)}">' for sol in solicitantes
+    ) + "</datalist>"
+    datalist += '<datalist id="assus">' + "".join(
+        f'<option value="{e(a)}">' for a in assuntos
     ) + "</datalist>"
 
     if f["status"] == STATUS_CONCLUIDO:
@@ -116,7 +131,7 @@ def renderizar(fila: str, f: dict) -> str:
         if abertos:
             queue_html = '<div class="queue">' + "".join(
                 render_ticket(posicoes.get(s["id"], i + 1), s, ocultos, fila,
-                              notas.get(s["id"], []), categorias, solicitantes, devs)
+                              notas.get(s["id"], []))
                 for i, s in enumerate(abertos)
             ) + "</div>"
         elif tem_filtro(f):
@@ -208,20 +223,17 @@ def renderizar(fila: str, f: dict) -> str:
             <input type="hidden" name="action" value="criar">
             {ocultos}
             <label for="solicitante">Solicitante</label>
-            {campo_combo("solicitante", solicitantes, obrigatorio=True,
-                         vazio="Selecione quem está pedindo",
-                         novo="Cadastrar novo solicitante…",
-                         placeholder="Nome de quem está pedindo",
-                         campo_id="solicitante")}
+            <input data-iniciais-maiusculas id="solicitante" name="solicitante"
+                   required maxlength="120" list="sols" placeholder="Quem está pedindo">
             <label for="assunto">Assunto</label>
-            <input id="assunto" name="assunto" required maxlength="160" placeholder="Resumo do problema">
+            <input id="assunto" name="assunto" required maxlength="160" list="assus"
+                   placeholder="Resumo do problema">
             <label for="descricao">Detalhes</label>
             <textarea id="descricao" name="descricao" maxlength="2000" placeholder="Contexto, passos, o que já foi tentado…"></textarea>
             <label for="categoria">Categoria</label>
-            {campo_combo("categoria", categorias, vazio="Sem categoria",
-                         novo="Cadastrar nova categoria…",
-                         placeholder="Ex.: Contratos, Equipamento",
-                         limite=60, campo_id="categoria")}
+            <input data-iniciais-maiusculas id="categoria" name="categoria"
+                   maxlength="60" list="cats"
+                   placeholder="Ex.: Contratos, Equipamento">
             <label for="prioridade">Prioridade</label>
             <select id="prioridade" name="prioridade">
                 <option value="normal" selected>Normal</option>
