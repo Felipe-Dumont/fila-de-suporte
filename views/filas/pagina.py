@@ -85,6 +85,14 @@ def renderizar(fila: str, f: dict) -> str:
             )
         ]
 
+        # solicitante é pessoa, não pertence a uma fila só: a lista junta as duas
+        solicitantes = [
+            r[0] for r in conn.execute(
+                "SELECT DISTINCT solicitante FROM solicitacoes WHERE solicitante <> '' "
+                "ORDER BY solicitante COLLATE NOCASE"
+            )
+        ]
+
         notas = carregar_notas(conn, list(abertos) + list(concluidos))
         al = buscar_alertas(conn)
     finally:
@@ -92,9 +100,8 @@ def renderizar(fila: str, f: dict) -> str:
 
     ocultos = campos_ocultos(f, fila)
     rotulos = dict(FILTRO_STATUS)
-    opcoes_datalist = "".join(f'<option value="{e(c)}">' for c in categorias)
-    datalist = f'<datalist id="cats">{opcoes_datalist}</datalist>'
-    datalist += '<datalist id="resps">' + "".join(
+    # o datalist restante serve ao campo de atribuição rápida no rodapé do card
+    datalist = '<datalist id="resps">' + "".join(
         f'<option value="{e(d)}">' for d in devs
     ) + "</datalist>"
 
@@ -109,7 +116,7 @@ def renderizar(fila: str, f: dict) -> str:
         if abertos:
             queue_html = '<div class="queue">' + "".join(
                 render_ticket(posicoes.get(s["id"], i + 1), s, ocultos, fila,
-                              notas.get(s["id"], []))
+                              notas.get(s["id"], []), categorias, solicitantes, devs)
                 for i, s in enumerate(abertos)
             ) + "</div>"
         elif tem_filtro(f):
@@ -201,16 +208,20 @@ def renderizar(fila: str, f: dict) -> str:
             <input type="hidden" name="action" value="criar">
             {ocultos}
             <label for="solicitante">Solicitante</label>
-            <input data-iniciais-maiusculas id="solicitante" name="solicitante"
-                   required maxlength="120" placeholder="Quem está pedindo">
+            {campo_combo("solicitante", solicitantes, obrigatorio=True,
+                         vazio="Selecione quem está pedindo",
+                         novo="Cadastrar novo solicitante…",
+                         placeholder="Nome de quem está pedindo",
+                         campo_id="solicitante")}
             <label for="assunto">Assunto</label>
             <input id="assunto" name="assunto" required maxlength="160" placeholder="Resumo do problema">
             <label for="descricao">Detalhes</label>
             <textarea id="descricao" name="descricao" maxlength="2000" placeholder="Contexto, passos, o que já foi tentado…"></textarea>
             <label for="categoria">Categoria</label>
-            <input data-iniciais-maiusculas id="categoria" name="categoria"
-                   maxlength="60" list="cats"
-                   placeholder="Ex.: Contratos, Equipamento">
+            {campo_combo("categoria", categorias, vazio="Sem categoria",
+                         novo="Cadastrar nova categoria…",
+                         placeholder="Ex.: Contratos, Equipamento",
+                         limite=60, campo_id="categoria")}
             <label for="prioridade">Prioridade</label>
             <select id="prioridade" name="prioridade">
                 <option value="normal" selected>Normal</option>

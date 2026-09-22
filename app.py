@@ -70,6 +70,10 @@ STATUS_ATENDIMENTO = "em_atendimento"
 STATUS_CONCLUIDO = "concluido"
 PRIORIDADES = ("baixa", "normal", "alta")
 
+# Valor sentinela dos campos "escolha ou cadastre": diz que o texto novo digitado
+# ao lado é que vale. Não colide com dado real — ninguém cadastra esse nome.
+OPCAO_NOVO = "__novo__"
+
 # Alertas: quanto tempo uma solicitação de suporte pode ficar parada na fila
 # antes de virar alerta. Demanda vira alerta quando chega o dia da previsão
 # sem ninguém ter iniciado.
@@ -894,6 +898,19 @@ def _condicoes(f: dict) -> tuple:
 # -----------------------------------------------------------------------------
 # Ações (POST)
 # -----------------------------------------------------------------------------
+def valor_combo(g, campo: str) -> str:
+    """Lê um campo "escolha ou cadastre": opção já usada ou o texto novo digitado.
+
+    Só o texto novo passa por `formatar_iniciais_maiusculas` — a opção escolhida
+    volta exatamente como está no banco, senão a grafia antiga viraria variante.
+    """
+    novo = g(f"{campo}_novo")
+    if novo:
+        return formatar_iniciais_maiusculas(novo)
+    escolhido = g(campo)
+    return "" if escolhido == OPCAO_NOVO else escolhido
+
+
 def handle_action(form: dict) -> None:
     def g(k: str) -> str:
         return (form.get(k, [""])[0] or "").strip()
@@ -903,8 +920,8 @@ def handle_action(form: dict) -> None:
     conn = get_db()
     try:
         if action == "criar":
-            solicitante = formatar_iniciais_maiusculas(g("solicitante"))
-            categoria = formatar_iniciais_maiusculas(g("categoria"))
+            solicitante = valor_combo(g, "solicitante")
+            categoria = valor_combo(g, "categoria")
             assunto = g("assunto")
             descricao = g("descricao")
             prioridade = g("prioridade") if g("prioridade") in PRIORIDADES else "normal"
@@ -923,14 +940,15 @@ def handle_action(form: dict) -> None:
                 )
 
         elif action == "editar" and g("id").isdigit():
-            solicitante, assunto = g("solicitante"), g("assunto")
+            solicitante, assunto = valor_combo(g, "solicitante"), g("assunto")
             prioridade = g("prioridade") if g("prioridade") in PRIORIDADES else "normal"
             if solicitante and assunto:      # campos obrigatórios: não deixa esvaziar
                 conn.execute(
                     "UPDATE solicitacoes SET solicitante = ?, assunto = ?, "
                     "descricao = ?, prioridade = ?, categoria = ? WHERE id = ?",
                     (solicitante, assunto, g("descricao"), prioridade,
-                     canonizar(conn, "categoria", g("categoria")), int(g("id"))),
+                     canonizar(conn, "categoria", valor_combo(g, "categoria")),
+                     int(g("id"))),
                 )
 
         elif action == "atribuir" and g("id").isdigit():
@@ -965,10 +983,19 @@ def handle_action(form: dict) -> None:
             )
 
         elif action == "concluir" and g("id").isdigit():
-            conn.execute(
-                "UPDATE solicitacoes SET status = ?, concluido_em = datetime('now') WHERE id = ?",
-                (STATUS_CONCLUIDO, int(g("id"))),
-            )
+            sid = int(g("id"))
+            atual = conn.execute(
+                "SELECT dev FROM solicitacoes WHERE id = ?", (sid,)
+            ).fetchone()
+            informado = canonizar(conn, "dev", valor_combo(g, "dev"))
+            responsavel = informado or (atual["dev"] if atual else "")
+            # chamado não fecha órfão: sem responsável a conclusão não acontece
+            if responsavel:
+                conn.execute(
+                    "UPDATE solicitacoes SET status = ?, dev = ?, "
+                    "concluido_em = datetime('now') WHERE id = ?",
+                    (STATUS_CONCLUIDO, responsavel, sid),
+                )
 
         elif action == "reabrir" and g("id").isdigit():
             conn.execute(
@@ -1076,6 +1103,10 @@ __VARIAVEIS_DE_COR__
         box-shadow: 0 0 0 3px rgba(var(--signal-rgb),.16); background: var(--surface);
     }
     textarea { resize: vertical; min-height: 62px; }
+    /* escolha ou cadastro: sem JS os dois controles ficam visíveis e vale o preenchido */
+    .combo { display: flex; flex-direction: column; gap: 6px; }
+    .combo .combo-novo[hidden] { display: none; }
+    details.tool .painel p.hint { color: var(--muted); font-size: 12.5px; margin: 0 0 4px; }
     .btn {
         display: inline-flex; align-items: center; gap: 7px; font: inherit; font-weight: 550;
         cursor: pointer; border: 1px solid transparent; border-radius: 8px; padding: 9px 14px;
@@ -1345,6 +1376,7 @@ from views.avaliar.pagina import configurar as configurar_avaliar
 from views.avaliar.pagina import render_avaliacao
 from views.concluidos.pagina import configurar as configurar_concluidos
 from views.concluidos.pagina import render_concluidos_todos
+from views.comum.componentes import campo_combo
 from views.comum.componentes import configurar as configurar_componentes
 from views.comum.componentes import render_abas
 from views.comum.componentes import render_concluidos, render_edicao, render_notas
@@ -1358,6 +1390,7 @@ from views.suporte.pagina import renderizar as render_suporte
 _contexto_views = globals().copy()
 configurar_componentes(_contexto_views)
 _contexto_views.update({
+    "campo_combo": campo_combo,
     "render_abas": render_abas,
     "render_concluidos": render_concluidos,
     "render_edicao": render_edicao,

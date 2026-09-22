@@ -50,6 +50,12 @@ def render_alertas() -> str:
                 "ORDER BY dev COLLATE NOCASE"
             )
         ]
+        solicitantes = [
+            r[0] for r in conn.execute(
+                "SELECT DISTINCT solicitante FROM solicitacoes WHERE solicitante <> '' "
+                "ORDER BY solicitante COLLATE NOCASE"
+            )
+        ]
     finally:
         conn.close()
 
@@ -61,7 +67,8 @@ def render_alertas() -> str:
         ocultos = campos_ocultos(vazio, fila, voltar=PATH_ALERTAS)
         cards = "".join(
             render_ticket(posicoes[fila].get(s["id"], 0), s, ocultos, fila,
-                          notas.get(s["id"], []))
+                          notas.get(s["id"], []), categorias, solicitantes,
+                          responsaveis)
             for s in rows
         )
         return f"""
@@ -90,8 +97,7 @@ def render_alertas() -> str:
             "</div>"
         )
 
-    opcoes_datalist = "".join(f'<option value="{e(c)}">' for c in categorias)
-    corpo += f'<datalist id="cats">{opcoes_datalist}</datalist>'
+    # o datalist restante serve ao campo de atribuição rápida no rodapé do card
     corpo += '<datalist id="resps">' + "".join(
         f'<option value="{e(d)}">' for d in responsaveis
     ) + "</datalist>"

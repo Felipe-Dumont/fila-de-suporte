@@ -239,6 +239,8 @@ ESTILOS_KANBAN = """
 
 SCRIPT_KANBAN = """
 (() => {
+    // conclusão entra aqui: chamado só fecha com alguém respondendo por ele
+    const ETAPAS_COM_RESPONSAVEL = ['atribuido', 'andamento', 'concluido'];
     const colunas = [...document.querySelectorAll('.kanban-coluna')];
     const dialog = document.querySelector('#responsavel-dialog');
     const campoResponsavel = document.querySelector('#novo-responsavel');
@@ -283,7 +285,7 @@ SCRIPT_KANBAN = """
         if (!card || destino === card.dataset.etapa) return;
 
         let responsavel = card.dataset.responsavel.trim();
-        if ((destino === 'atribuido' || destino === 'andamento') && !responsavel) {
+        if (ETAPAS_COM_RESPONSAVEL.includes(destino) && !responsavel) {
             responsavel = await pedirResponsavel();
             if (!responsavel) return;
         }
