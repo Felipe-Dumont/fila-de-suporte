@@ -968,10 +968,19 @@ def handle_action(form: dict) -> None:
             )
 
         elif action == "concluir" and g("id").isdigit():
-            conn.execute(
-                "UPDATE solicitacoes SET status = ?, concluido_em = datetime('now') WHERE id = ?",
-                (STATUS_CONCLUIDO, int(g("id"))),
-            )
+            sid = int(g("id"))
+            atual = conn.execute(
+                "SELECT dev FROM solicitacoes WHERE id = ?", (sid,)
+            ).fetchone()
+            informado = canonizar(conn, "dev", g("dev"))
+            responsavel = informado or (atual["dev"] if atual else "")
+            # chamado não fecha órfão: sem responsável a conclusão não acontece
+            if responsavel:
+                conn.execute(
+                    "UPDATE solicitacoes SET status = ?, dev = ?, "
+                    "concluido_em = datetime('now') WHERE id = ?",
+                    (STATUS_CONCLUIDO, responsavel, sid),
+                )
 
         elif action == "reabrir" and g("id").isdigit():
             conn.execute(
@@ -1115,6 +1124,7 @@ __VARIAVEIS_DE_COR__
         box-shadow: 0 0 0 3px rgba(var(--signal-rgb),.16); background: var(--surface);
     }
     textarea { resize: vertical; min-height: 62px; }
+    details.tool .painel p.hint { color: var(--muted); font-size: 12.5px; margin: 0 0 4px; }
     .btn {
         display: inline-flex; align-items: center; gap: 7px; font: inherit; font-weight: 550;
         cursor: pointer; border: 1px solid transparent; border-radius: 8px; padding: 9px 14px;

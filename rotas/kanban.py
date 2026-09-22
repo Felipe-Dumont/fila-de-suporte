@@ -10,6 +10,8 @@ from views.kanban.pagina import render_kanban
 PATH_KANBAN = "/kanban"
 PATH_MOVER_KANBAN = "/kanban/mover"
 DESTINOS = ("pendente", "atribuido", "andamento", "concluido")
+# etapas que não aceitam chamado órfão — inclusive a conclusão, que precisa de dono
+DESTINOS_COM_RESPONSAVEL = ("atribuido", "andamento", "concluido")
 LIMITE_PAYLOAD_BYTES = 16 * 1024
 DIAS_CONCLUIDOS_KANBAN = 5
 
@@ -145,7 +147,7 @@ def _mover_chamado(payload: dict) -> tuple[dict, str, int]:
         responsavel = _dependencias["canonizar"](
             conn, "dev", responsavel_enviado or chamado["dev"]
         )
-        if destino in ("atribuido", "andamento") and not responsavel:
+        if destino in DESTINOS_COM_RESPONSAVEL and not responsavel:
             return {}, "Informe um responsável para mover para esta coluna.", 422
 
         if destino == "pendente":

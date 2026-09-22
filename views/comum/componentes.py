@@ -179,6 +179,32 @@ def render_ticket(pos: int, s: sqlite3.Row, ocultos: str, fila: str,
                 <button class="btn ghost" type="submit">{FILAS[fila]['iniciar']}</button>
             </form>"""
 
+    # chamado só fecha com dono: sem responsável, concluir pede quem atendeu
+    if s["dev"]:
+        concluir_form = f"""
+                <form class="inline" method="post">
+                    <input type="hidden" name="action" value="concluir">
+                    <input type="hidden" name="id" value="{s['id']}">
+                    {ocultos}
+                    <button class="btn ghost" type="submit">Concluir</button>
+                </form>"""
+    else:
+        concluir_form = f"""
+                <details class="tool">
+                    <summary>Concluir</summary>
+                    <form class="painel" method="post">
+                        <input type="hidden" name="action" value="concluir">
+                        <input type="hidden" name="id" value="{s['id']}">
+                        {ocultos}
+                        <p class="hint">Este chamado ainda não tem
+                           {conf['resp'].lower()}. Informe quem atendeu para concluir.</p>
+                        <label>{conf['resp']}</label>
+                        <input name="dev" required maxlength="80" list="{lista_resp}"
+                               placeholder="{conf['resp_ph']}">
+                        <button class="btn primary" type="submit">Concluir chamado</button>
+                    </form>
+                </details>"""
+
     return f"""
     <article class="ticket {'next' if is_next else ''} {nivel}">
         <div class="pos"><span class="n mono">{pos}</span></div>
@@ -195,12 +221,7 @@ def render_ticket(pos: int, s: sqlite3.Row, ocultos: str, fila: str,
             <div class="tags">{alerta_tag}{status_tag}{cat_tag}{prio_tag}{extra_tags}</div>
             <div class="actions">
                 {iniciar_btn}
-                <form class="inline" method="post">
-                    <input type="hidden" name="action" value="concluir">
-                    <input type="hidden" name="id" value="{s['id']}">
-                    {ocultos}
-                    <button class="btn ghost" type="submit">Concluir</button>
-                </form>
+                {concluir_form}
                 <form class="inline" method="post" onsubmit="return confirm('Excluir esta solicitação?')">
                     <input type="hidden" name="action" value="excluir">
                     <input type="hidden" name="id" value="{s['id']}">

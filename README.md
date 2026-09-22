@@ -104,7 +104,10 @@ e atualize este README junto.
 9. **A fila é por ordem de chegada** (`ORDER BY criado_em ASC, id ASC`). Prioridade
    (`baixa`/`normal`/`alta`) é **apenas marcador visual — não fura a fila**.
 10. Ciclo de vida: `na_fila` → `em_atendimento` → `concluido`, e dá para reabrir
-    (volta para `na_fila` e limpa `concluido_em`).
+    (volta para `na_fila` e limpa `concluido_em`). **Concluir exige responsável**:
+    sem `dev` preenchido nada é gravado, tanto na ação `concluir` quanto ao mover
+    um card para a coluna "Concluídos" do Kanban. Quando o chamado ainda não tem
+    dono, o próprio botão Concluir abre o campo que pede quem atendeu.
 11. As duas filas moram na **mesma tabela**, separadas pela coluna `fila`
     (`suporte` | `demandas`). Os rótulos de cada uma vêm do dicionário `FILAS` —
     para mudar texto de UI de uma fila, edite `FILAS`, não o HTML espalhado.
